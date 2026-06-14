@@ -4,7 +4,7 @@ Issues, bug reports, and PRs are all welcome.
 
 ## Prerequisites
 
-- **Ruby** 3.0+
+- **Ruby** 3.4+
 - **Rust** (stable), from <https://rustup.rs>
 
 That's all you need to work on the gem itself. The demo additionally uses

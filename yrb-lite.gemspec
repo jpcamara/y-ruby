@@ -13,7 +13,7 @@ Gem::Specification.new do |spec|
                      "BlockNote) with no Node sidecar, including native server-side ProseMirror extraction."
   spec.homepage = "https://github.com/jpcamara/yrb-lite"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.0.0"
+  spec.required_ruby_version = ">= 3.4.0"
 
   spec.files = Dir[
     "lib/**/*.rb",
@@ -27,13 +27,13 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/yrb_lite/extconf.rb"]
 
-  spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
 
-  spec.add_dependency "base64" # Required for Ruby 3.4+
+  # base64 stopped being a default gem in Ruby 3.4, so depend on it explicitly.
+  spec.add_dependency "base64", "~> 0.2"
   spec.add_dependency "rb_sys", "~> 0.9"
 
   spec.add_development_dependency "minitest", "~> 5.0"

@@ -7,14 +7,21 @@ on:
 
 jobs:
   gem:
-    name: Gem (Rust + Ruby)
+    name: Gem (Ruby ${{ matrix.ruby }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.4 is the minimum supported Ruby; ruby-head tracks the next major
+        # (Ruby 4) so regressions surface early without blocking the pipeline.
+        ruby: ["3.4", "ruby-head"]
+    continue-on-error: ${{ matrix.ruby == 'ruby-head' }}
     steps:
       - uses: actions/checkout@v5
 
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.3"
+          ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
       - uses: dtolnay/rust-toolchain@stable
@@ -72,7 +79,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.3"
+          ruby-version: "3.4"
           bundler-cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
