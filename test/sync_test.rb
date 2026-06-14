@@ -37,6 +37,7 @@ class SyncTest < Minitest::Test
     calls = 0
     loader = lambda do |key|
       calls += 1
+
       assert_equal "loaded-room", key
       state
     end
@@ -46,6 +47,7 @@ class SyncTest < Minitest::Test
 
     assert_equal 1, calls, "on_load should run once per key"
     target.apply_update(awareness.encode_state_as_update)
+
     assert_equal source.encode_state_vector, target.encode_state_vector
   end
 
@@ -60,6 +62,7 @@ class SyncTest < Minitest::Test
 
   def test_reset_clears_registry
     YrbLite::Sync.awareness_for("room-1")
+
     refute_empty YrbLite::Sync.registry
 
     YrbLite::Sync.reset!
@@ -67,32 +70,15 @@ class SyncTest < Minitest::Test
     assert_empty YrbLite::Sync.registry
   end
 
-  def test_broadcast_classification
-    sync_step1 = "\x00\x00\x01\x00".b
-    sync_step2 = "\x00\x01\x01\x00".b
-    sync_update = "\x00\x02\x01\x00".b
-    awareness_update = "\x01\x01\x00".b
-    query_awareness = "\x03".b
-
-    refute @helper.send(:sync_broadcast?, sync_step1), "SyncStep1 is addressed to the server"
-    assert @helper.send(:sync_broadcast?, sync_step2)
-    assert @helper.send(:sync_broadcast?, sync_update)
-    assert @helper.send(:sync_broadcast?, awareness_update)
-    refute @helper.send(:sync_broadcast?, query_awareness)
-
-    refute @helper.send(:sync_modifies_doc?, sync_step1)
-    assert @helper.send(:sync_modifies_doc?, sync_step2)
-    assert @helper.send(:sync_modifies_doc?, sync_update)
-    refute @helper.send(:sync_modifies_doc?, awareness_update)
-  end
-
   # -- Store-backed (AnyCable-native) backend ------------------------------
 
   def store_backed_helper(loader:, recorder:, transmits:, broadcasts:)
     klass = Class.new do
       include YrbLite::Sync
+
       sync_backend :store
       attr_accessor :_t, :_b
+
       def transmit(data) = @_t << data
       define_method(:sync_distribute) { |encoded| @_b << encoded }
     end
@@ -106,8 +92,10 @@ class SyncTest < Minitest::Test
 
   def test_sync_backend_defaults_to_memory_and_is_settable
     klass = Class.new { include YrbLite::Sync }
+
     assert_equal :memory, klass.sync_backend
     klass.sync_backend :store
+
     assert_equal :store, klass.sync_backend
   end
 
@@ -130,6 +118,7 @@ class SyncTest < Minitest::Test
     delta = YrbLite::Awareness.new.update_from_message(response)
     rebuilt = YrbLite::Doc.new
     rebuilt.apply_update(delta)
+
     assert_equal source.encode_state_vector, rebuilt.encode_state_vector,
                  "the SyncStep2 carries the store's current state"
     assert_empty broadcasts, "a handshake request is not broadcast"
@@ -138,7 +127,7 @@ class SyncTest < Minitest::Test
   def test_store_backed_records_then_relays_an_update
     recorded = []
     broadcasts = []
-    helper = store_backed_helper(loader: ->(_k) { nil }, recorder: ->(k, u) { recorded << [k, u] },
+    helper = store_backed_helper(loader: ->(_k) {}, recorder: ->(k, u) { recorded << [k, u] },
                                  transmits: [], broadcasts: broadcasts)
 
     msg = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
@@ -154,7 +143,7 @@ class SyncTest < Minitest::Test
   def test_store_backed_skips_no_op_updates
     recorded = []
     broadcasts = []
-    helper = store_backed_helper(loader: ->(_k) { nil }, recorder: ->(_k, u) { recorded << u },
+    helper = store_backed_helper(loader: ->(_k) {}, recorder: ->(_k, u) { recorded << u },
                                  transmits: [], broadcasts: broadcasts)
 
     empty = YrbLite::Awareness.new.encode_update(YjsFixtures::EmptyDoc::UPDATE)
@@ -179,7 +168,7 @@ class SyncTest < Minitest::Test
     msg = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
 
     # A change that arrived from another process (different pid) is applied to
-    # the local replica but NOT re-recorded (its origin process recorded it).
+    # the local replica but not re-recorded; its origin process already did.
     helper.send(:sync_on_broadcast,
                 { "m" => Base64.strict_encode64(msg), "origin" => "other", "pid" => "process-b" })
 
@@ -209,13 +198,14 @@ class SyncTest < Minitest::Test
     YrbLite::Sync.subscribe("evict-room") # two subscribers
 
     saved = []
+
     refute YrbLite::Sync.release("evict-room", evictable: true) { |_a| saved << :save },
-           "one subscriber remains — not evicted"
+           "one subscriber remains, so not evicted"
     assert YrbLite::Sync.registry.key?("evict-room")
     assert_empty saved
 
     assert YrbLite::Sync.release("evict-room", evictable: true) { |_a| saved << :save },
-           "last subscriber left — evicted"
+           "last subscriber left, so evicted"
     refute YrbLite::Sync.registry.key?("evict-room")
     assert_equal [:save], saved, "persisted exactly once before eviction"
   end
@@ -226,7 +216,7 @@ class SyncTest < Minitest::Test
 
     refute YrbLite::Sync.release("keep-room", evictable: false)
     assert YrbLite::Sync.registry.key?("keep-room"),
-           "with no on_load, unloading would lose data — keep it warm"
+           "with no on_load, unloading would lose data, so keep it warm"
   end
 
   def test_eviction_aborts_if_a_subscriber_returns_during_persist
@@ -256,7 +246,9 @@ class SyncTest < Minitest::Test
   def authoritative_helper(key, broadcasts:, &recorder)
     klass = Class.new do
       include YrbLite::Sync
+
       attr_accessor :captured_broadcasts
+
       def transmit(_data); end
       define_method(:sync_distribute) { |encoded| @captured_broadcasts << encoded }
     end
@@ -289,6 +281,7 @@ class SyncTest < Minitest::Test
 
     assert_equal 1, events.length, "recorder runs once per document change"
     event = events.first
+
     assert_equal key, event[:key]
     assert_equal YjsFixtures::TwoDocsMerged::DOC1_UPDATE, event[:update],
                  "the exact change delta is recorded"
@@ -326,8 +319,8 @@ class SyncTest < Minitest::Test
     recorder = ->(_k, update) { recorded << update }
     helper = authoritative_helper(key, broadcasts: [], &recorder)
 
-    # Awareness update (presence) and a SyncStep1 request are not document
-    # changes — they must not hit the audit recorder.
+    # Awareness update (presence) and a SyncStep1 request aren't document
+    # changes, so they must not hit the audit recorder.
     presence = YrbLite::Awareness.new
     presence.set_local_state('{"user":"alice"}')
     helper.sync_receive({ "m" => Base64.strict_encode64(presence.encode_awareness_update) })
@@ -338,7 +331,7 @@ class SyncTest < Minitest::Test
 
   def test_no_op_change_is_not_recorded_or_distributed
     # The empty SyncStep2/Update a client sends during its opening handshake
-    # carries no document change — it must not pollute the audit log or be
+    # carries no document change, so it must not land in the audit log or get
     # relayed.
     key = "noop-room"
     recorded = []
@@ -355,16 +348,17 @@ class SyncTest < Minitest::Test
   end
 
   def test_unrecorded_change_is_invisible_to_concurrent_readers
-    # The back door: other clients can read the server's document via a
-    # sync/resync (SyncStep2 is computed from the doc's state vector). A change
-    # still being recorded must not be visible through that path either — which
-    # is why recording happens before the change is applied to the document.
+    # There's another way to observe a change: other clients can read the
+    # server's document via a sync/resync, since SyncStep2 is computed from the
+    # doc's state vector. A change still being recorded must not show up through
+    # that path either. That's why recording happens before the change is
+    # applied to the document.
     key = "backdoor-room"
     entered = Queue.new
     release = Queue.new
     recorder = lambda do |_k, _update|
       entered << true # we're inside the recorder, before apply
-      release.pop      # block here until the test lets us finish
+      release.pop # block here until the test lets us finish
     end
     helper = authoritative_helper(key, broadcasts: [], &recorder)
     empty_sv = YrbLite::Awareness.new.encode_state_vector
@@ -375,6 +369,7 @@ class SyncTest < Minitest::Test
 
     entered.pop # recorder is now mid-write; the change is not yet recorded
     server = YrbLite::Sync.registry[key]
+
     assert_equal empty_sv, server.encode_state_vector,
                  "a change still being recorded must be invisible to a resync/read"
 
@@ -386,9 +381,9 @@ class SyncTest < Minitest::Test
   end
 
   def test_change_records_on_redelivery_after_a_failure_heals
-    # A transient store failure rejects the change; when the client re-offers
-    # it (on resync/reconnect) and the store has recovered, it records and
-    # applies normally — self-healing, no special handling.
+    # A transient store failure rejects the change. When the client re-offers it
+    # on resync/reconnect and the store has recovered, it records and applies
+    # normally, with no special-case handling in between.
     key = "self-heal-room"
     failing = true
     recorder = lambda do |_k, _update|
@@ -405,6 +400,7 @@ class SyncTest < Minitest::Test
 
     failing = false
     helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE))
+
     refute_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
                  "the re-offered change records and applies after recovery"
   end
@@ -449,6 +445,7 @@ class SyncTest < Minitest::Test
     replay = YrbLite::Doc.new
     log.each { |update| replay.apply_update(update) }
     server = YrbLite::Sync.registry[key]
+
     assert_equal server.encode_state_vector, replay.encode_state_vector
     assert_equal server.encode_state_as_update, replay.encode_state_as_update,
                  "replaying the audit log reproduces the authoritative state"
@@ -464,10 +461,10 @@ class SyncTest < Minitest::Test
     result = doc.handle_sync_message(sync_step1)
 
     # Should return [msg_type, sync_type, response]
-    assert result.is_a?(Array)
+    assert_kind_of Array, result
     assert_equal 3, result.length
     assert_equal 0, result[0] # MSG_SYNC
     assert_equal 0, result[1] # Responding to STEP1
-    assert result[2].is_a?(String) # Response bytes (SyncStep2)
+    assert_kind_of String, result[2] # Response bytes (SyncStep2)
   end
 end

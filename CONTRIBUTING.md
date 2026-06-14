@@ -1,0 +1,72 @@
+# Contributing to yrb-lite
+
+Issues, bug reports, and PRs are all welcome.
+
+## Prerequisites
+
+- **Ruby** 3.0+
+- **Rust** (stable), from <https://rustup.rs>
+
+That's all you need to work on the gem itself. The demo additionally uses
+PostgreSQL, [bun](https://bun.sh), and (for some tests) Redis and
+[anycable-go](https://docs.anycable.io).
+
+## Building & testing the gem
+
+```bash
+bundle install
+bundle exec rake compile        # build the Rust extension
+bundle exec rake test           # Ruby test suite (test/**/*_test.rb)
+
+cargo test  --manifest-path ext/yrb_lite/Cargo.toml   # Rust unit tests
+```
+
+### Linting
+
+CI enforces all of these; run them before opening a PR:
+
+```bash
+bundle exec rubocop                                              # Ruby
+cargo fmt   --manifest-path ext/yrb_lite/Cargo.toml -- --check   # Rust format
+cargo clippy --manifest-path ext/yrb_lite/Cargo.toml --all-targets -- -D warnings
+```
+
+`cargo fmt -m ext/yrb_lite/Cargo.toml` and `bundle exec rubocop -A` auto-fix
+most issues.
+
+## Layout
+
+```
+lib/                     # Ruby: YrbLite::Sync (the ActionCable concern)
+ext/yrb_lite/src/        # Rust: lib.rs (magnus bindings) + prosemirror.rs
+test/                    # Ruby unit tests
+examples/actioncable-demo/   # a separate, deliberately thorough demo app (see below)
+```
+
+The native code keeps the binding (magnus/`RString`/GVL) separate from pure
+logic (e.g. `classify_message`, `merged_doc_update`, the ProseMirror
+extraction) so the logic is unit-tested directly in Rust.
+
+## The demo
+
+[`examples/actioncable-demo`](examples/actioncable-demo) is its own Rails app
+with its own bundle. It covers a lot of ground: classic ActionCable, AnyCable,
+a Postgres-backed audit store, and a fairly large end-to-end, load, and
+real-browser test suite. It isn't part of the gem's packaged code, so treat it
+as documentation by example. Its README covers how to run it and what each test
+scenario does.
+
+```bash
+cd examples/actioncable-demo
+bundle install
+bin/rails db:prepare
+cd frontend && bun install && bun run build && cd ..
+AUDIT=1 bin/rails s
+```
+
+## Pull requests
+
+- Keep the binding layer thin; put testable logic in pure functions.
+- Add/adjust tests (Ruby, and Rust for pure logic).
+- Make sure `rake test`, `cargo test`, rubocop, clippy, and rustfmt all pass.
+- Update `CHANGELOG.md` under **[Unreleased]**.

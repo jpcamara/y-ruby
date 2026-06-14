@@ -1,14 +1,14 @@
 // Probe yrb-lite's behavior under AnyCable. WS is terminated by anycable-go
-// (WS_PORT), channel logic runs in the AnyCable RPC server (a DIFFERENT Ruby
+// (WS_PORT), channel logic runs in the AnyCable RPC server (a different Ruby
 // process than Puma), and HTTP (/content) is served by Puma (HTTP_PORT).
 //
-// We check the things predicted to break under AnyCable:
+// We check the things likely to break under AnyCable:
 //   - does subscribing even work (stream_from has a custom block)?
 //   - liveness: does B receive A's edit?
-//   - echo: does A receive its OWN edit back (origin filter lives in the
+//   - echo: does A receive its own edit back (the origin filter lives in the
 //     stream_from block, which AnyCable doesn't run)?
-//   - server-side read: does Puma's /content reflect the doc (it holds no
-//     replica — the RPC process handled the edit)?
+//   - server-side read: does Puma's /content reflect the doc, given it holds no
+//     replica and the RPC process handled the edit?
 import * as Y from "yjs"
 import * as syncProtocol from "y-protocols/sync"
 import * as encoding from "lib0/encoding"
@@ -29,7 +29,7 @@ class Client {
     this.identifier = JSON.stringify({ channel: "DocumentChannel", id: ROOM })
     this.subscribed = new Promise((r) => (this._sub = r))
     this.confirmed = false
-    this.echoed = 0 // times we received a frame carrying our OWN update
+    this.echoed = 0 // times we received a frame carrying our own update
     this.localUpdates = []
     this.doc.on("update", (u, origin) => {
       if (origin === "remote") return
@@ -99,13 +99,13 @@ console.log(`subscribed: A=${a.confirmed} B=${b.confirmed}`)
 a.edit("hello-from-A")
 await sleep(1200)
 
-console.log(`\nLIVENESS  — B received A's edit:        ${b.text().includes("hello-from-A")}`)
-console.log(`ECHO      — A got its own edit back:     ${a.echoed > 0} (count ${a.echoed})`)
+console.log(`\nLIVENESS  B received A's edit:        ${b.text().includes("hello-from-A")}`)
+console.log(`ECHO      A got its own edit back:     ${a.echoed > 0} (count ${a.echoed})`)
 
 const res = await fetch(`http://localhost:${HTTP_PORT}/docs/${ROOM}/content`)
 let serverView
 try { serverView = JSON.stringify(await res.json()) } catch { serverView = `status ${res.status}` }
-console.log(`SERVER    — Puma /content (different process than RPC): ${res.status} ${serverView.slice(0, 120)}`)
+console.log(`SERVER    Puma /content (different process than RPC): ${res.status} ${serverView.slice(0, 120)}`)
 
 a.ws.close(); b.ws.close()
 process.exit(0)

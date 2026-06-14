@@ -11,15 +11,15 @@
 //     shared paragraph, each tagged with a unique token, plus awareness churn
 //   - LATE clients join mid-storm and must catch up
 //   - KILLERS finish their edits, then drop the socket abruptly mid-traffic
-//   - POLLERS hammer GET /docs/:id/content (server-side extraction) during
-//     the storm — concurrent native readers against concurrent writers
+//   - POLLERS hit GET /docs/:id/content (server-side extraction) during the
+//     storm: concurrent native readers against concurrent writers
 //   - afterward, a fresh verifier client syncs from the server alone
 //
-// Asserts, per room: all docs (survivors + a fresh verifier that syncs from
-// the server alone) converge byte-for-byte, and characters are conserved —
-// total text length equals the sum of all inserted token lengths, so nothing
-// was lost or applied twice. (Token *substrings* can't be asserted: concurrent
-// inserts at random offsets legally interleave inside other clients' runs.)
+// Checks, per room: all docs (survivors plus a fresh verifier that syncs from
+// the server alone) converge byte-for-byte, and characters are conserved, so
+// total text length equals the sum of all inserted token lengths and nothing
+// was lost or applied twice. Token substrings aren't asserted, since concurrent
+// inserts at random offsets can legally interleave inside other clients' runs.
 import * as Y from "yjs"
 import * as awarenessProtocol from "y-protocols/awareness"
 import * as syncProtocol from "y-protocols/sync"
@@ -156,8 +156,8 @@ class StressClient {
   }
 
   async storm() {
-    // Churn clients drop mid-storm, keep editing OFFLINE for 10 rounds, then
-    // reconnect — the step1/step2 handshake must merge in both directions.
+    // Churn clients drop mid-storm, keep editing offline for 10 rounds, then
+    // reconnect, and the step1/step2 handshake has to merge both directions.
     const offlineAt = this.churn ? Math.floor(EDITS / 2) : -1
     for (let round = 0; round < EDITS; round++) {
       if (round === offlineAt) this.ws.close()
@@ -284,8 +284,8 @@ const waitFor = async (label, predicate, timeoutMs = 20000, diagnose = null) => 
   throw new Error(`TIMEOUT: ${label}`)
 }
 
-// Visible characters only — concurrent inserts legally split each other's
-// runs, so we assert character conservation, not token substrings.
+// Visible characters only. Concurrent inserts legally split each other's runs,
+// so we assert character conservation rather than token substrings.
 const visibleChars = (s) => s.replace(/<[^>]+>/g, "").length
 
 // On failure: per-client character deficit and whether updates are queued
@@ -309,8 +309,8 @@ const diagnoseRoom = (room, expectedChars) => {
 for (const room of rooms) {
   const tokens = expectedTokens.get(room)
   // Character conservation: every doc must hold exactly the characters of
-  // every token inserted by every client (including killed ones) — no loss,
-  // no double-application.
+  // every token inserted by every client (including killed ones), with no loss
+  // and nothing applied twice.
   const expectedChars = tokens.reduce((sum, t) => sum + t.length, 0)
 
   await waitFor(
@@ -358,7 +358,7 @@ for (const room of rooms) {
 
   verifier.close()
   console.log(
-    `ok: ${room} — ${tokens.length} edits / ${expectedChars} chars conserved, ` +
+    `ok: ${room} with ${tokens.length} edits / ${expectedChars} chars conserved, ` +
       `${survivors(room).length + 1} docs byte-identical, server extraction matches`
   )
 }
@@ -371,7 +371,7 @@ for (const room of rooms) clientsByRoom.get(room).forEach((c) => c.close())
 
 const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
 console.log(
-  `\nPASS in ${elapsed}s — ${messagesSent} cable messages sent, ${messagesReceived} received, ` +
+  `\nPASS in ${elapsed}s: ${messagesSent} cable messages sent, ${messagesReceived} received, ` +
     `${pollCount} concurrent extraction reads (0 server errors)`
 )
 process.exit(0)

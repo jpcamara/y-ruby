@@ -11,7 +11,11 @@ Rake::TestTask.new(:test) do |t|
   t.test_files = FileList["test/**/*_test.rb"]
 end
 
-RbSys::ExtensionTask.new("yrb_lite") do |ext|
+# Passing the gemspec registers the cross-compilation tasks
+# (`native:<platform> gem`) that the precompiled-gem build relies on.
+GEMSPEC = Gem::Specification.load("yrb-lite.gemspec")
+
+RbSys::ExtensionTask.new("yrb_lite", GEMSPEC) do |ext|
   ext.lib_dir = "lib/yrb_lite"
 end
 

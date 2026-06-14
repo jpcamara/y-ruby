@@ -2,21 +2,22 @@
 
 require "base64"
 
-# A PostgreSQL-backed durable store for document changes — the realistic
-# production store. Each `record` is a committed INSERT (durable in the WAL
-# before it returns), and Postgres group-commits concurrent transactions, so
-# many processes recording at once share fsyncs instead of serializing the way
-# a per-file store does. The bigserial `id` is the authoritative total order.
+# A PostgreSQL-backed durable store for document changes, closer to what you'd
+# run in production than the file store. Each `record` is a committed INSERT,
+# durable in the WAL before it returns. Postgres group-commits concurrent
+# transactions, so many processes recording at once can share fsyncs instead of
+# serializing the way a per-file store does. The bigserial `id` gives the total
+# order of changes.
 module PgStore
   module_function
 
   INSERT_SQL = "INSERT INTO document_changes (doc_key, delta) VALUES ($1, $2)"
 
   # Synchronously persist a change. Returns only after the row is committed
-  # (durable; synchronous_commit=on). Raising rejects the change — yrb-lite
-  # won't apply or relay it. Uses a raw parameterized INSERT with a binary
-  # bytea bind to avoid AR model/validation overhead per change; concurrent
-  # commits from the RPC worker threads group-commit in Postgres.
+  # (synchronous_commit=on). Raising rejects the change, and yrb-lite won't
+  # apply or relay it. This uses a raw parameterized INSERT with a binary bytea
+  # bind to skip the per-change cost of an AR model; concurrent commits from the
+  # RPC worker threads group-commit in Postgres.
   def record(key, update)
     Fault.simulate(key)
     DocumentChange.connection.raw_connection.exec_params(

@@ -7,32 +7,34 @@ require "open3"
 # Interop tests between yrb-lite, Y.js, and yrs
 # These tests verify that all three implementations can communicate properly
 class InteropTest < Minitest::Test
-  BUN_PATH = File.expand_path("~/.bun/bin/bun")
+  # Resolve bun from the standard install location or PATH.
+  BUN_PATH = [File.expand_path("~/.bun/bin/bun"), `command -v bun 2>/dev/null`.strip]
+             .find { |p| !p.empty? && File.exist?(p) }
   YJS_GENERATOR = File.expand_path("fixtures/yjs_generator.mjs", __dir__)
   YRS_GENERATOR_DIR = File.expand_path("fixtures/yrs_generator", __dir__)
   YRS_GENERATOR = File.join(YRS_GENERATOR_DIR, "target/release/yrs_generator")
 
+  # These tests cross-check byte compatibility with the real Y.js and yrs
+  # implementations, so they need external tooling (bun + Y.js, and a built
+  # yrs_generator). When that tooling isn't present they're skipped rather than
+  # failed, so `rake test` is green anywhere; they run locally and in any CI job
+  # that installs the tooling.
   def setup
-    unless File.exist?(BUN_PATH)
-      raise "bun is required for interop tests. Install with: curl -fsSL https://bun.sh/install | bash"
-    end
+    skip "bun not found (install bun to run interop tests)" unless BUN_PATH
 
-    unless File.exist?(YRS_GENERATOR)
-      if File.exist?(File.join(YRS_GENERATOR_DIR, "Cargo.toml"))
-        # Try to build yrs_generator
-        system("cd #{YRS_GENERATOR_DIR} && cargo build --release 2>/dev/null")
-      end
+    return if File.exist?(YRS_GENERATOR)
 
-      unless File.exist?(YRS_GENERATOR)
-        raise "yrs_generator is required for interop tests. Build with: cd #{YRS_GENERATOR_DIR} && cargo build --release"
-      end
+    if File.exist?(File.join(YRS_GENERATOR_DIR, "Cargo.toml"))
+      system("cd #{YRS_GENERATOR_DIR} && cargo build --release 2>/dev/null")
     end
+    skip "yrs_generator not built; skipping interop tests" unless File.exist?(YRS_GENERATOR)
   end
 
   # Helper to call Y.js generator
   def yjs(*args)
     stdout, stderr, status = Open3.capture3(BUN_PATH, "run", YJS_GENERATOR, *args.map(&:to_s))
     raise "yjs_generator failed: #{stderr}" unless status.success?
+
     JSON.parse(stdout)
   end
 
@@ -40,6 +42,7 @@ class InteropTest < Minitest::Test
   def yrs(*args)
     stdout, status = Open3.capture2(YRS_GENERATOR, *args.map(&:to_s))
     raise "yrs_generator failed: #{stdout}" unless status.success?
+
     JSON.parse(stdout)
   end
 
@@ -71,6 +74,7 @@ class InteropTest < Minitest::Test
     result = yjs("empty-doc", 1)
 
     doc = YrbLite::Doc.new
+
     assert_equal b64_decode(result["state_vector"]), doc.encode_state_vector
   end
 
@@ -86,7 +90,8 @@ class InteropTest < Minitest::Test
 
     # Verify it has content from both (state vector size > empty)
     empty_sv_size = b64_decode(yjs("empty-doc")["state_vector"]).bytesize
-    assert doc.encode_state_vector.bytesize > empty_sv_size
+
+    assert_operator doc.encode_state_vector.bytesize, :>, empty_sv_size
   end
 
   # ============================================================================
@@ -106,10 +111,12 @@ class InteropTest < Minitest::Test
 
     # Y.js should be able to apply it
     result = yjs("apply-update", update)
+
     assert result["state_vector"]
 
     # Verify content is preserved
     text_result = yjs("get-text", update, "content")
+
     assert_equal "test content", text_result["content"]
   end
 
@@ -118,6 +125,7 @@ class InteropTest < Minitest::Test
     update = b64_encode(doc.encode_state_as_update)
 
     result = yjs("apply-update", update)
+
     assert result["state_vector"]
   end
 
@@ -139,6 +147,7 @@ class InteropTest < Minitest::Test
     result = yrs("empty-doc", 1)
 
     doc = YrbLite::Doc.new
+
     assert_equal b64_decode(result["state_vector"]), doc.encode_state_vector
   end
 
@@ -168,9 +177,11 @@ class InteropTest < Minitest::Test
     update = b64_encode(doc.encode_state_as_update)
 
     result = yrs("apply-update", update)
+
     assert result["state_vector"]
 
     text_result = yrs("get-text", update, "content")
+
     assert_equal "test content", text_result["content"]
   end
 
@@ -231,6 +242,7 @@ class InteropTest < Minitest::Test
     # Verify yrb-lite now has the content
     update = b64_encode(doc.encode_state_as_update)
     text = yjs("get-text", update, "content")
+
     assert_equal "sync test", text["content"]
   end
 
@@ -280,10 +292,12 @@ class InteropTest < Minitest::Test
 
     # Check yrb-lite has Y.js content
     doc1_text = yjs("get-text", yrb_final_update, "doc1")
+
     assert_equal "yjs content", doc1_text["content"]
 
     # Check Y.js has yrb-lite content
     doc2_text = yjs("get-text", yjs_merged["update"], "doc2")
+
     assert_equal "yrb content", doc2_text["content"]
   end
 end

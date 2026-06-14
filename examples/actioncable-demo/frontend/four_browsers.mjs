@@ -1,6 +1,6 @@
-// Four real Chrome browsers typing into the SAME document at the SAME time.
+// Four real Chrome browsers typing into the same document at the same time.
 // Each browser types its own digit so we can account for every keystroke per
-// contributor — proving nothing is lost under genuine simultaneous typing.
+// contributor and confirm nothing is lost under simultaneous typing.
 //
 //   bin/rails s -p 3777          (or two processes; pass PORTS=3777,3778)
 //   cd frontend && bun four_browsers.mjs
@@ -83,7 +83,7 @@ try {
   }
   check(`total characters conserved (${t1.length} == ${PER * 4})`, t1.length === PER * 4)
 
-  // ---- Round 2: all four type at the SAME position (max contention) ------
+  // ---- Round 2: all four type at the same position (max contention) ------
   console.log("\n--- Round 2: 4 browsers type at the document start, at once ---")
   await Promise.all(pages.map(async (p, i) => {
     await p.evaluate(() => window.__yrb.editor.commands.focus("start"))
@@ -114,6 +114,6 @@ try {
 }
 
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures} check(s) failed`); process.exit(1) }
-console.log("PASS — four browsers typing at once: full convergence, every keystroke accounted for")
+if (failures > 0) { console.log(`FAILED: ${failures} check(s) failed`); process.exit(1) }
+console.log("PASS: four browsers typing at once: full convergence, every keystroke accounted for")
 process.exit(0)

@@ -6,10 +6,11 @@ require "json"
 
 # Thread-safety regression tests.
 #
-# The native types are thread-safe by construction: yrs::Doc is Send + Sync
-# (internal blocking RwLock around every transaction) and yrs Awareness uses
-# a concurrent map. There is no RefCell/interior-mutability in the extension,
-# and a compile-time assertion in lib.rs proves Send + Sync for both types.
+# The native types are safe to share across threads: yrs::Doc is Send + Sync,
+# with an internal blocking RwLock around every transaction, and yrs Awareness
+# uses a concurrent map. The extension adds no RefCell or other interior
+# mutability, and a compile-time assertion in lib.rs checks Send + Sync for both
+# types.
 #
 # These tests hammer shared instances from many Ruby threads. Under MRI the
 # GVL serializes native calls, so they primarily guard against regressions
@@ -45,6 +46,7 @@ class ThreadSafetyTest < Minitest::Test
     # sequential application of the same updates.
     sequential = YrbLite::Doc.new
     updates.each { |u| sequential.apply_update(u) }
+
     assert_equal sequential.encode_state_vector, doc.encode_state_vector
     assert_equal sequential.encode_state_as_update, doc.encode_state_as_update
   end
@@ -96,6 +98,7 @@ class ThreadSafetyTest < Minitest::Test
     # canonical across implementations, so compare via our own encoding).
     sequential = YrbLite::Doc.new
     sources.each { |u| sequential.apply_update(u) }
+
     assert_equal sequential.encode_state_vector, shared.encode_state_vector
     assert_equal sequential.encode_state_as_update, shared.encode_state_as_update
   end
@@ -114,6 +117,7 @@ class ThreadSafetyTest < Minitest::Test
 
     assert_empty errors
     final = JSON.parse(awareness.local_state)
+
     assert_includes 0...THREADS, final["thread"]
     assert_equal ITERATIONS - 1, final["tick"]
   end

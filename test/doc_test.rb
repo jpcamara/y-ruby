@@ -6,23 +6,27 @@ require_relative "fixtures/yjs_fixtures"
 class DocTest < Minitest::Test
   def test_doc_creation
     doc = YrbLite::Doc.new
+
     assert_instance_of YrbLite::Doc, doc
   end
 
   def test_doc_with_client_id
-    doc = YrbLite::Doc.new(12345)
-    assert_equal 12345, doc.client_id
+    doc = YrbLite::Doc.new(12_345)
+
+    assert_equal 12_345, doc.client_id
   end
 
   def test_doc_has_random_client_id
     doc = YrbLite::Doc.new
+
     assert_kind_of Integer, doc.client_id
-    assert doc.client_id > 0
+    assert_predicate doc.client_id, :positive?
   end
 
   def test_doc_has_guid
     doc = YrbLite::Doc.new
     guid = doc.guid
+
     assert_kind_of String, guid
     refute_empty guid
   end
@@ -30,12 +34,14 @@ class DocTest < Minitest::Test
   def test_encode_state_vector
     doc = YrbLite::Doc.new
     sv = doc.encode_state_vector
+
     assert_kind_of String, sv
   end
 
   def test_encode_state_as_update_without_state_vector
     doc = YrbLite::Doc.new
     update = doc.encode_state_as_update
+
     assert_kind_of String, update
   end
 
@@ -52,6 +58,7 @@ class DocTest < Minitest::Test
   def test_sync_step1
     doc = YrbLite::Doc.new
     step1 = doc.sync_step1
+
     assert_kind_of String, step1
     refute_empty step1
   end
@@ -60,6 +67,7 @@ class DocTest < Minitest::Test
     doc = YrbLite::Doc.new
     sv = doc.encode_state_vector
     step2 = doc.sync_step2(sv)
+
     assert_kind_of String, step2
     refute_empty step2
   end
@@ -74,6 +82,7 @@ class DocTest < Minitest::Test
 
     assert_kind_of Array, result
     msg_type, sync_type, response = result
+
     assert_equal YrbLite::MSG_SYNC, msg_type
     assert_equal YrbLite::MSG_SYNC_STEP1, sync_type
     refute_empty response
@@ -152,7 +161,7 @@ class DocTest < Minitest::Test
     assert_equal doc.encode_state_vector, doc2.encode_state_vector
 
     # State vector should have content from both clients (length > empty)
-    assert doc.encode_state_vector.bytesize > YjsFixtures::EmptyDoc::STATE_VECTOR.bytesize
+    assert_operator doc.encode_state_vector.bytesize, :>, YjsFixtures::EmptyDoc::STATE_VECTOR.bytesize
   end
 
   def test_sync_protocol_with_yjs_update

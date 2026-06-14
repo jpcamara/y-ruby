@@ -20,8 +20,8 @@ end
 
 work = lambda do
   OPS_PER_THREAD.times do
-    # Parse + apply a large update into a fresh doc, then extract
-    # ProseMirror JSON — all heavy native work, embarrassingly parallel.
+    # Parse + apply a large update into a fresh doc, then extract ProseMirror
+    # JSON. It's all heavy native work, and embarrassingly parallel.
     YrbLite.extract_prosemirror_json(UPDATE, nil)
   end
 end

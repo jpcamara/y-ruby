@@ -1,30 +1,77 @@
-# YrbLite
+# yrb-lite
 
-Simple Ruby bindings for y-crdt via Rust, implementing the y-websocket sync protocol.
+[![CI](https://github.com/jpcamara/yrb-lite/actions/workflows/ci.yml/badge.svg)](https://github.com/jpcamara/yrb-lite/actions/workflows/ci.yml)
 
-This gem provides minimal functionality needed to synchronize Y.js documents between clients using ActionCable or similar WebSocket solutions.
+Collaborative editing for Rails, backed by [y-crdt](https://github.com/y-crdt/y-crdt)
+(the Rust library behind Y.js). Your Rails server speaks the y-websocket sync
+protocol directly, so there's no separate Node process hosting the Y.js
+documents.
 
-## Features
+```ruby
+class DocumentChannel < ApplicationCable::Channel
+  include YrbLite::Sync
 
-- **Built on yrs**: Uses the official Rust y-crdt implementation
-- **Complete sync protocol**: Full y-websocket protocol support via `yrs::sync`
-- **Awareness support**: User presence/cursor state management
-- **Actually thread-safe**: share `Doc`/`Awareness` across Ruby threads — see [Thread Safety](#thread-safety)
-- **ProseMirror extraction**: Read ProseMirror/Tiptap editor content from Y.Doc updates without JavaScript
+  def subscribed   = sync_for(params[:id])
+  def receive(data) = sync_receive(data)
+  def unsubscribed = sync_clear_presence
+end
+```
 
-## Installation
+On the browser, use the [`@y-rb/actioncable`](https://www.npmjs.com/package/@y-rb/actioncable)
+provider as-is. Tiptap, ProseMirror, and BlockNote all sync through it.
 
-### Prerequisites
+## What you get
 
-- Rust toolchain (install from https://rustup.rs)
-- Ruby 3.0+
+- Thread-safe `Doc` and `Awareness`. You can share them across Puma threads,
+  and the GVL is released while yrs does the actual work.
+- The y-websocket protocol (document sync plus awareness/presence) as a
+  one-include ActionCable concern.
+- A store-backed mode for AnyCable and multi-process deployments.
+- Server-side reads: pull Tiptap/ProseMirror JSON straight out of a Y.Doc
+  without running a browser.
+- An optional authoritative mode that records each change durably before it
+  goes out to anyone.
 
-### Setup
+What it doesn't do: auth, read-only connections, rate limiting, webhooks,
+metrics. Hocuspocus ships extensions for those; here you'd build them with
+Rails.
+
+## Testing
+
+Ruby and Rust unit tests cover the core, and an end-to-end suite runs the real
+stack: it fuzzes the protocol, throws garbage and chaos at the server, kills the
+server mid-write to check crash recovery, and drives real browsers under load.
+The benchmark numbers below are from a single laptop. Issues and PRs are
+welcome.
+
+## Install
+
+```ruby
+gem "yrb-lite"
+```
+
+Precompiled gems ship for Linux and macOS on Ruby 3.1–3.4, so installing
+doesn't need Rust. Other platforms build from source, which needs
+[Rust](https://rustup.rs) and Ruby 3.0+.
+
+To work on the gem itself:
 
 ```bash
+git clone https://github.com/jpcamara/yrb-lite
+cd yrb-lite
 bundle install
-rake compile
+bundle exec rake compile test
 ```
+
+The rest of the dev setup, plus the demo, is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Docs
+
+- The ActionCable concern and a quickstart are [below](#actioncable-integration).
+- [`examples/actioncable-demo`](examples/actioncable-demo): a runnable Rails +
+  Tiptap app with collaborative cursors, the AnyCable setup, a Postgres store,
+  and the test/load suites.
+- [CHANGELOG.md](CHANGELOG.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 
@@ -109,65 +156,60 @@ class DocumentChannel < ApplicationCable::Channel
 end
 ```
 
-It keeps one shared `YrbLite::Awareness` per document key (creation is
-mutex-serialized; everything after runs lock-free on the thread-safe native
-types), answers SyncStep1s directly, relays document and awareness changes
-to other subscribers without echoing them back to the sender, and calls
-`on_save` after every message that modified the document.
+One `YrbLite::Awareness` is shared per document key. Creating it is
+mutex-serialized; after that everything runs lock-free on the thread-safe
+native types. The concern answers SyncStep1 directly, relays document and
+awareness changes to the other subscribers (not back to the sender), and calls
+`on_save` after any message that changed the document.
 
-`sync_unsubscribed` (from `unsubscribed`) does two things: clears this
-connection's presence (so a dropped socket or closed tab doesn't leave a
-stale cursor until the client-side timeout reaps it), and — when the last
-subscriber for a document leaves — persists and unloads the document from
-memory, so a long-running server doesn't accumulate every document it has
-ever served. Unloading only happens when an `on_load` is configured (so the
-document can be brought back); otherwise the in-memory copy is kept.
+`sync_unsubscribed` clears the connection's presence, so a closed tab doesn't
+leave a stale cursor hanging until the client-side timeout. It also unloads the
+document from memory once the last subscriber disconnects, which keeps the
+process from holding onto every document it ever served. That unload only
+happens when `on_load` is set and the document can be reloaded later; without
+it, the in-memory copy is the only one and stays put.
 
-**Hostile input is handled defensively.** Every incoming frame is validated
-as exactly one well-formed protocol message before it is processed or
-relayed; malformed, truncated, multi-message, oversized, or unknown frames
-are dropped. So a malicious client can't crash the server (a Rust panic is
-caught at the FFI boundary and surfaced as a Ruby exception, never a process
-death) or relay garbage that disrupts the other clients in a room.
+Incoming frames are validated as a single well-formed protocol message before
+anything processes or relays them. Malformed, truncated, multi-message,
+oversized, or unknown frames are dropped. A bad frame can't crash the process: a
+Rust panic is caught at the FFI boundary and re-raised as a Ruby exception. And
+no single client can relay garbage that breaks the others in a room.
 
 #### Multi-process deployments
 
-A real Rails app runs multiple processes (Puma workers, multiple dynos), so
-documents have to be shared across them. They are:
+Most Rails apps run several processes (Puma workers, multiple dynos), and any of
+them might serve a given document. Two pieces keep them in step.
 
-- **Liveness** rides the Action Cable adapter — use a multi-process adapter
-  (`redis` or `solid_cable`, not `async`) and a change on one process reaches
-  clients on every process.
-- **Each process keeps its own in-memory replica current.** A broadcast that
-  originated on another process is applied to the local replica (idempotent
-  CRDT merge — no re-recording, order-independent), so server-side reads and
-  new-client handshakes on any process are never stale. Broadcasts are stamped
-  with a per-process id (`Sync.process_id`) so a process skips its own.
-- **A shared durable store is the source of truth** for cold loads: when a
-  process spins up a replica it rebuilds current state via `on_load`. In
-  authoritative mode the store is always current (recorded before
-  distribution), so this is exact — and the record-before-distribute guarantee
-  holds across processes: each change is recorded by the process that receives
-  it, to the shared store, before anyone on any process sees it.
+Broadcasts cross processes through the Action Cable adapter, so it needs to be a
+real one (`redis` or `solid_cable`, not `async`). With that in place, a change
+on one process reaches clients on all of them.
 
-The [demo](examples/actioncable-demo) includes a two-process test
-(`bun multiprocess.mjs`) that splits clients across two server processes and
-asserts cross-process convergence, replica freshness on both, cross-process
-presence, and a single shared audit log.
+Each process also keeps its own copy of the document and applies broadcasts from
+the others. The merge is an ordinary CRDT apply, idempotent and
+order-independent, which keeps server reads and new-client handshakes current on
+every process. Each broadcast carries a per-process id (`Sync.process_id`) that
+tells a process to skip its own.
 
-This in-memory-replica approach (`sync_backend :memory`, the default) assumes
-classic ActionCable, where the channel instance lives for the connection and a
-custom `stream_from` callback runs in Ruby per broadcast.
+A cold process (no copy yet) rebuilds from the durable store through `on_load`.
+In authoritative mode the store is always current, since changes are recorded
+before they go out. Record-before-distribute therefore holds across processes:
+whichever process receives a change records it to the shared store before
+anyone, anywhere, sees it.
+
+`bun multiprocess.mjs` in the demo runs clients across two processes and checks
+the lot: convergence, fresh copies on both, presence across processes, and one
+shared log.
 
 ##### AnyCable (`sync_backend :store`)
 
-Under **AnyCable** that model doesn't hold: broadcasts are delivered by
-anycable-go (outside Ruby, so custom `stream_from` callbacks don't run), each
-RPC command gets a fresh channel instance (instance variables set in
-`subscribed` are gone by `receive`), and there's no worker↔document affinity.
+The default backend keeps that warm in-memory copy and relies on a `stream_from`
+block running in Ruby for each broadcast. AnyCable breaks both assumptions.
+anycable-go delivers broadcasts outside Ruby, so the block never runs. Each RPC
+gets a fresh channel instance, which means ivars set in `subscribed` are gone by
+`receive`. And there's no fixed worker-to-document mapping to lean on.
 
-`sync_backend :store` is the AnyCable-native path — stateless per message, no
-warm replica:
+`sync_backend :store` is the path for that: stateless per message, no warm
+copy.
 
 ```ruby
 class DocumentChannel < ApplicationCable::Channel
@@ -183,26 +225,24 @@ class DocumentChannel < ApplicationCable::Channel
 end
 ```
 
-- `stream_from` is registered without a block; anycable-go relays broadcasts.
-- A client's SyncStep1 (handshake) is answered from the store; changes are
-  recorded (before relay) and broadcast. No document is held in Ruby memory
-  between calls — any worker can handle any message correctly.
-- Pass `params[:id]` to `sync_receive`/`sync_unsubscribed` so the key survives
-  AnyCable's per-command channel instances.
-- Echo isn't suppressed (no per-broadcast Ruby callback to filter on), but a
-  client receiving its own update is a harmless idempotent CRDT no-op.
+- `stream_from` is registered without a block; anycable-go does the relaying.
+- A handshake (SyncStep1) is answered from the store. Changes are recorded, then
+  broadcast. Nothing is held in Ruby between calls, so any worker can handle any
+  message.
+- Pass `params[:id]` into `sync_receive`/`sync_unsubscribed` so the document key
+  survives AnyCable's per-command instances.
+- The sender gets its own updates echoed back (no Ruby callback to filter them).
+  That's a no-op, since applying an update twice does nothing.
 
-Verified end to end against `anycable-go` + the AnyCable RPC server: liveness,
-the `@y-rb/actioncable` provider, cross-process reads (the editing process and
-the HTTP process are different), and concurrent convergence. See the demo's
-`frontend/anycable_probe.mjs` and `anycable_concurrent.mjs`.
+The demo checks this against a real anycable-go + RPC server
+(`frontend/anycable_probe.mjs`, `anycable_concurrent.mjs`): liveness, the
+`@y-rb/actioncable` provider, cross-process reads, and concurrent convergence.
 
-Messages are the standard y-protocols binary messages, base64-encoded in the
-ActionCable envelope. The server is **wire-compatible with the standard
-[`@y-rb/actioncable`](https://www.npmjs.com/package/@y-rb/actioncable) browser
-provider** — it accepts that provider's `{ "update" => ... }` envelope as well
-as its own `{ "m" => ... }`, and sends one protocol message per frame — so you
-can use the off-the-shelf provider with no custom client code:
+The wire format is the standard y-protocols binary messages, base64-encoded in
+the ActionCable envelope. The server accepts the `@y-rb/actioncable` provider's
+`{ "update" => ... }` envelope (and its own `{ "m" => ... }`) and sends one
+message per frame, so the off-the-shelf provider works with no custom client
+code:
 
 ```js
 import { createConsumer } from "@rails/actioncable"
@@ -211,16 +251,15 @@ import { WebsocketProvider } from "@y-rb/actioncable"
 const provider = new WebsocketProvider(ydoc, createConsumer(), "DocumentChannel", { id: docId })
 ```
 
-A complete working example — Rails app, Tiptap editor with collaborative
-cursors using that provider, and automated end-to-end tests — lives in
-[`examples/actioncable-demo`](examples/actioncable-demo).
+[`examples/actioncable-demo`](examples/actioncable-demo) is a full Rails + Tiptap
+app using that provider, with end-to-end tests.
 
 #### Authoritative audit mode (record before distribute)
 
-By default a change is applied and broadcast immediately (fast path). If you
-need to **durably record every change before anyone else sees it** — for
-auditing, or to guarantee nothing is distributed until it's stored — register
-an `on_change` recorder:
+By default a change is applied and broadcast immediately (the fast path). If you
+need to durably record every change before anyone else sees it, whether for
+auditing or to guarantee nothing is distributed until it's stored, register an
+`on_change` recorder:
 
 ```ruby
 class DocumentChannel < ApplicationCable::Channel
@@ -237,25 +276,22 @@ class DocumentChannel < ApplicationCable::Channel
 end
 ```
 
-With `on_change` registered, document changes take the strict path:
+With `on_change` registered, a change is recorded before it goes anywhere. The
+recorder writes the raw CRDT delta synchronously; only then is the change
+applied to the shared document and broadcast. The whole sequence runs under a
+per-document lock, so every change to a document is recorded in the same order
+it's applied. That's what makes the log authoritative. Replay the deltas onto a
+fresh `Y.Doc` and you get the document back exactly.
 
-1. **Record** the change (the raw CRDT update delta) — synchronously.
-2. **Apply** it to the shared document — only after it's recorded.
-3. **Broadcast** it to other subscribers — only after it's applied.
+If the recorder raises (say the store is down), the change is rejected: not
+applied, not sent to anyone. The cost is a synchronous durable write per change,
+which serializes that document's writes. Other documents use other locks and run
+in parallel.
 
-The whole sequence runs under a per-document lock, so a document's changes
-are recorded in a **single total order that matches the order they're
-applied** — the recorded log is authoritative. If the recorder raises (e.g.
-the store is unavailable), the change is **rejected**: not applied to the
-document, not sent to anyone. Replaying the recorded deltas in order onto a
-fresh `Y.Doc` reconstructs the document exactly. (The cost is the one you're
-asking for: a synchronous durable write per change serializes that document's
-writes. Different documents use different locks and proceed in parallel.)
-
-`on_change` and `on_save` are independent — `on_save` snapshots the whole
-document opportunistically; `on_change` is the per-change authoritative log.
-The demo's `AUDIT=1` mode (see [`examples/actioncable-demo`](examples/actioncable-demo))
-wires this to an fsync'd append-only log and proves, end to end, that the log
+`on_change` and `on_save` are separate. `on_save` snapshots the whole document
+when it gets a chance; `on_change` is the per-change log. The demo's `AUDIT=1`
+mode (in [`examples/actioncable-demo`](examples/actioncable-demo)) wires
+`on_change` to an fsync'd append-only log and checks, end to end, that the log
 alone rebuilds the document.
 
 ### User Awareness/Presence
@@ -308,54 +344,51 @@ content = YrbLite::ProseMirrorExtractor.extract_from_doc(doc)
 content = YrbLite::ProseMirrorExtractor.extract(update_bytes, fragment: "prosemirror")
 ```
 
-See [docs/PROSEMIRROR.md](docs/PROSEMIRROR.md) and [docs/ACCURACY.md](docs/ACCURACY.md)
-for the research behind the ProseMirror <-> Y.Doc mapping.
-
 ## Thread Safety
 
-Unlike the official `y-rb` gem, yrb-lite is safe to share across Ruby threads —
-a `Doc` or `Awareness` can be used concurrently from Puma workers, ActionCable
+Unlike the official `y-rb` gem, yrb-lite is safe to share across Ruby threads. A
+`Doc` or `Awareness` can be used concurrently from Puma workers, ActionCable
 connection threads, or background jobs without external locking.
 
-Why this is true by construction, not by accident:
+That comes from how the underlying types work, not from locking on top:
 
-- **`yrs::Doc` is `Send + Sync`.** Every operation acquires the document's
-  internal RwLock with *blocking* semantics (`read_blocking`/`write_blocking`),
-  so concurrent access serializes instead of erroring or corrupting state.
-- **`yrs::sync::Awareness` is designed for multi-threaded servers** — client
-  states live in a concurrent map (`DashMap`) and the whole API is `&self`.
-- **No interior-mutability hacks in the extension.** There is no `RefCell`
-  (whose re-entrant borrow would panic and kill the Ruby process). Every native
-  method opens and closes its transaction within a single call — no lock or
-  borrow is ever held across calls, so there is nothing to deadlock on.
-- **Compile-time enforcement**: `lib.rs` contains a `Send + Sync` static
-  assertion for both wrapped types. If a future yrs upgrade regressed this,
-  the gem would fail to build rather than silently become thread-unsafe.
+- `yrs::Doc` is `Send + Sync`. Every operation takes the document's internal
+  RwLock with blocking semantics (`read_blocking`/`write_blocking`), so
+  concurrent access serializes instead of erroring or corrupting state.
+- `yrs::sync::Awareness` is built for multi-threaded servers: client states
+  live in a `DashMap` and the whole API is `&self`.
+- The extension adds no interior-mutability tricks. There's no `RefCell`, where
+  a re-entrant borrow would panic and take the Ruby process down with it.
+  Each native method opens and closes its transaction in one call, so no lock
+  or borrow outlives a call and there's nothing to deadlock on.
+- A `Send + Sync` static assertion for both wrapped types lives in `lib.rs`. If
+  a yrs upgrade regressed this, the gem would fail to compile instead of quietly
+  turning thread-unsafe.
 
-`test/thread_safety_test.rb` exercises shared docs, the full sync handshake,
-fan-in sync, awareness state, and ProseMirror extraction from 8 threads
-concurrently and asserts CRDT convergence is unaffected by interleaving.
+`test/thread_safety_test.rb` runs shared docs, the full sync handshake, fan-in
+sync, awareness state, and ProseMirror extraction across 8 threads at once, and
+checks the interleaving doesn't change convergence.
 
-### True Parallelism (GVL Release)
+### Parallelism (GVL release)
 
 Every method that does real CRDT work (applying updates, encoding state,
-handling sync messages, ProseMirror extraction) releases Ruby's Global VM
-Lock (`rb_thread_call_without_gvl`) while the native code runs. That means:
+handling sync messages, ProseMirror extraction) releases Ruby's Global VM Lock
+(`rb_thread_call_without_gvl`) while the native code runs. That buys two things.
 
-- **Heavy CRDT operations run in parallel across Ruby threads** — on MRI,
-  not just JRuby/TruffleRuby. `bench/parallelism_bench.rb` shows >2x
-  wall-clock speedup running concurrent extractions of a ~900 KB document
-  update (GVL-held native code can never beat serial time).
-- **A slow operation can't stall the VM.** A thread applying a large update
-  holds the doc's internal write lock *without* holding the GVL, so other
-  Ruby threads keep running instead of queueing behind it.
+CRDT work runs in parallel across Ruby threads on MRI, not just
+JRuby/TruffleRuby. `bench/parallelism_bench.rb` measures over 2x wall-clock
+speedup on concurrent extractions of a ~900 KB update; native code that held the
+GVL couldn't beat serial time.
 
-The pattern inside each method: copy the Ruby byte string, release the GVL,
-do all yrs work (acquiring and releasing the doc lock entirely inside the
-closure), reacquire the GVL, then build Ruby result objects. No Ruby API is
-touched without the GVL, and no doc lock is ever held across a GVL
-boundary — so the lock ordering is deadlock-free by construction. Panics in
-native code are caught and re-raised as Ruby exceptions.
+A slow operation also can't stall the VM. A thread applying a large update holds
+the doc's write lock without holding the GVL, so other Ruby threads keep running
+instead of queuing behind it.
+
+Each method has the same shape: copy the Ruby byte string, drop the GVL, do the
+yrs work (taking and releasing the doc lock entirely inside the closure), take
+the GVL back, then build Ruby objects. No Ruby API is touched without the GVL,
+and the doc lock is never held across a GVL boundary, so the lock order can't
+deadlock. Panics in native code are caught and re-raised as Ruby exceptions.
 
 ## Message Type Constants
 

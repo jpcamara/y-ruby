@@ -1,4 +1,4 @@
-// Authoritative audit test: proves the server records every change BEFORE
+// Authoritative audit test: checks that the server records every change before
 // distributing it, in a single total order, and that the audit log alone
 // reconstructs the document byte-for-byte.
 //
@@ -84,7 +84,6 @@ class Client {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const xmlText = (doc) => doc.getXmlFragment("default").toString()
 
 // --- Scenario ---------------------------------------------------------------
 
@@ -97,7 +96,7 @@ for (let i = 1; i <= EDITS; i++) {
 }
 await sleep(400) // let the server drain
 
-// Fetch the authoritative audit log and replay it with no live server help.
+// Fetch the audit log and replay it with no live server help.
 const auditRes = await fetch(`http://localhost:${PORT}/docs/${ROOM}/audit`)
 const audit = await auditRes.json()
 if (audit.count < EDITS) {
@@ -123,8 +122,8 @@ if (replay.getXmlFragment("default").length !== client.doc.getXmlFragment("defau
   throw new Error("replayed document structure differs from the client's")
 }
 
-// The strongest check: the audit-log replay equals the client's own document
-// byte-for-byte. The log is a complete, authoritative record.
+// The main check: the audit-log replay equals the client's own document
+// byte-for-byte, so the log is a complete record on its own.
 const a = Y.encodeStateAsUpdate(replay)
 const b = Y.encodeStateAsUpdate(client.doc)
 if (a.length !== b.length || !a.every((byte, i) => byte === b[i])) {
@@ -133,5 +132,5 @@ if (a.length !== b.length || !a.every((byte, i) => byte === b[i])) {
 console.log("ok: audit-log replay reconstructs the document byte-for-byte")
 
 client.ws.close()
-console.log(`\nPASS — room ${ROOM}, ${audit.count} changes recorded before distribution`)
+console.log(`\nPASS: room ${ROOM}, ${audit.count} changes recorded before distribution`)
 process.exit(0)

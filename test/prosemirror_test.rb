@@ -22,6 +22,7 @@ class ProseMirrorTest < Minitest::Test
 
     assert_equal "paragraph", paragraph["type"]
     runs = paragraph["content"]
+
     assert_equal 4, runs.length
 
     assert_equal({ "type" => "text", "text" => "Hello " }, runs[0])
@@ -42,13 +43,14 @@ class ProseMirrorTest < Minitest::Test
     result = YrbLite::ProseMirrorExtractor.extract_from_doc(doc)
 
     assert_equal "doc", result["type"]
-    assert_equal %w[heading paragraph], result["content"].map { |n| n["type"] }
+    assert_equal(%w[heading paragraph], result["content"].map { |n| n["type"] })
   end
 
   def test_extract_with_explicit_fragment_name
     result = YrbLite::ProseMirrorExtractor.extract(
       YjsFixtures::ProseMirrorDoc::UPDATE, fragment: "prosemirror"
     )
+
     assert_equal "doc", result["type"]
   end
 
@@ -79,6 +81,7 @@ class ProseMirrorTest < Minitest::Test
     doc.apply_update(YjsFixtures::ProseMirrorDoc::UPDATE)
 
     json = doc.prosemirror_json
+
     assert_kind_of String, json
     assert_equal "doc", JSON.parse(json)["type"]
   end

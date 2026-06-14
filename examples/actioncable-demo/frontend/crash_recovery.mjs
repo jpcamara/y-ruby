@@ -3,12 +3,12 @@
 //
 //   PHASE=write  ROOM=... bun crash_recovery.mjs   # make edits, wait until logged
 //   <SIGKILL the server, restart it>
-//   PHASE=verify ROOM=... bun crash_recovery.mjs   # assert nothing was lost
+//   PHASE=verify ROOM=... bun crash_recovery.mjs   # check nothing was lost
 //
-// Because audit mode records every change (fsync) BEFORE it's applied or
-// broadcast, every acknowledged edit is on disk when the server dies. On
-// restart, on_load replays the log and the document is whole — no loss
-// window, unlike a debounced-persistence server.
+// Audit mode fsyncs every change before it's applied or broadcast, so every
+// acknowledged edit is on disk when the server dies. On restart, on_load
+// replays the log and the document comes back whole, without the loss window a
+// debounced-persistence server would have.
 import * as Y from "yjs"
 import * as syncProtocol from "y-protocols/sync"
 import * as encoding from "lib0/encoding"
@@ -105,7 +105,7 @@ if (PHASE === "write") {
     console.log(`FAIL: only ${count}/${EDITS} edits recorded before kill`)
     process.exit(1)
   }
-  console.log(`wrote ${EDITS} edits, ${count} recorded (fsync'd) — safe to kill`)
+  console.log(`wrote ${EDITS} edits, ${count} recorded (fsync'd); safe to kill`)
   process.exit(0)
 }
 
@@ -130,7 +130,7 @@ const liveMissing = []
 for (let i = 1; i <= EDITS; i++) if (!liveText.includes(`edit-${i}`)) liveMissing.push(i)
 
 if (missing === 0 && liveMissing.length === 0) {
-  console.log(`PASS — all ${EDITS} edits recovered from the audit log after kill -9`)
+  console.log(`PASS: all ${EDITS} edits recovered from the audit log after kill -9`)
   process.exit(0)
 }
 console.log(`FAIL: ${missing} missing for client, ${liveMissing.length} missing on server`)

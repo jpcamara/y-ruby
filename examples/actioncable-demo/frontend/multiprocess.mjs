@@ -1,14 +1,14 @@
 // Multi-process test. Two independent Rails server processes (different ports)
 // share documents through a Redis cable adapter and a shared audit store.
-// Clients are split across the two processes. Proves the gem works in a real
-// Rails deployment (multiple Puma workers / dynos), not just single-process.
+// Clients are split across the two processes, which mirrors a real Rails
+// deployment (multiple Puma workers or dynos) rather than a single process.
 //
-//   Boot two servers sharing Redis + the audit dir, then:
+//   Boot two servers sharing Redis and the audit dir, then:
 //   PORTS=3777,3778 bun multiprocess.mjs
 //
-// Asserts: cross-process liveness, BOTH processes' server-side replicas stay
-// current (server reads + late-joiner handshakes), cross-process presence, and
-// a single shared audit log with every change recorded exactly once.
+// Checks cross-process liveness, that both processes' server-side replicas stay
+// current (server reads and late-joiner handshakes), cross-process presence,
+// and a single shared audit log with every change recorded exactly once.
 import * as Y from "yjs"
 import * as awarenessProtocol from "y-protocols/awareness"
 import * as syncProtocol from "y-protocols/sync"
@@ -144,7 +144,7 @@ check("all clients across both processes converged byte-for-byte",
     return s.length === ref.length && s.every((x, i) => x === ref[i])
   }))
 
-// 2. Both processes' SERVER-SIDE replicas are current (not just the clients).
+// 2. Both processes' server-side replicas are current, not just the clients.
 const textA = await serverText(portA)
 const textB = await serverText(portB)
 let bothFresh = true
@@ -182,6 +182,6 @@ check("both processes see the same shared audit log", countA === countB)
 clients.forEach((c) => c.ws.close())
 late.ws.close()
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures} check(s) failed`); process.exit(1) }
-console.log("PASS — documents are shared correctly across two server processes")
+if (failures > 0) { console.log(`FAILED: ${failures} check(s) failed`); process.exit(1) }
+console.log("PASS: documents are shared correctly across two server processes")
 process.exit(0)

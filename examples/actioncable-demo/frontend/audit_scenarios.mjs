@@ -1,22 +1,22 @@
-// Authoritative audit scenarios — end to end, through real ActionCable, with
-// multiple real clients and a fault-injectable store. Proves the one
-// guarantee that matters: no one else sees a change until it has been stored.
+// Authoritative audit scenarios, end to end through real ActionCable, with
+// multiple real clients and a fault-injectable store. The guarantee under test:
+// no one else sees a change until it has been stored.
 //
 //   1. Boot in audit mode:  AUDIT=1 RAILS_MAX_THREADS=8 CABLE_WORKERS=8 bin/rails s -p 3777
 //   2. Run:                 cd frontend && bun audit_scenarios.mjs
 //
 // Scenarios:
-//   1. Slow store      — while a change is being stored, NO other client sees
-//                        it (not via live broadcast, not via the /content
-//                        read, not via a fresh client's resync). After the
-//                        store completes, everyone sees it and it's logged.
-//   2. Store failure   — a failed store leaks nothing to anyone and is absent
-//                        from the audit log.
-//   3. Self-heal       — after a failed store, the client reconnects and
-//                        re-offers the change; the (recovered) store records
-//                        it and everyone converges.
-//   4. Offline catch-up — edits made offline are recorded (as one merged diff)
-//                        when the client reconnects, before others see them.
+//   1. Slow store       while a change is being stored, no other client sees
+//                       it (not via live broadcast, not via the /content read,
+//                       not via a fresh client's resync). After the store
+//                       completes, everyone sees it and it's logged.
+//   2. Store failure    a failed store leaks nothing to anyone and is absent
+//                       from the audit log.
+//   3. Self-heal        after a failed store, the client reconnects and
+//                       re-offers the change; the recovered store records it
+//                       and everyone converges.
+//   4. Offline catch-up edits made offline are recorded (as one merged diff)
+//                       when the client reconnects, before others see them.
 import * as Y from "yjs"
 import * as syncProtocol from "y-protocols/sync"
 import * as encoding from "lib0/encoding"
@@ -140,7 +140,7 @@ const serverText = async (room) => {
   return (json.content || []).flatMap((n) => (n.content || []).map((t) => t.text)).join("\n")
 }
 
-// === Scenario 1: slow store — invisible until stored =======================
+// === Scenario 1: slow store, invisible until stored ========================
 
 async function slowStore() {
   console.log("\n--- Scenario 1: no one sees a change until it's stored ---")
@@ -276,8 +276,8 @@ await offlineCatchUp()
 
 console.log("")
 if (failures > 0) {
-  console.log(`FAILED — ${failures} check(s) failed`)
+  console.log(`FAILED: ${failures} check(s) failed`)
   process.exit(1)
 }
-console.log("PASS — every scenario held: no change is visible to anyone until it is stored")
+console.log("PASS: every scenario held: no change is visible to anyone until it is stored")
 process.exit(0)

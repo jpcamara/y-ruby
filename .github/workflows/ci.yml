@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gem:
+    name: Gem (Rust + Ruby)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # Rust: formatting + lints (clippy needs Ruby headers via rb-sys, so it
+      # runs here after setup-ruby).
+      - name: rustfmt
+        run: cargo fmt --manifest-path ext/yrb_lite/Cargo.toml -- --check
+      - name: clippy
+        run: cargo clippy --manifest-path ext/yrb_lite/Cargo.toml --all-targets -- -D warnings
+      - name: cargo test (Rust unit tests)
+        run: cargo test --manifest-path ext/yrb_lite/Cargo.toml
+
+      # Ruby: build the extension, run the test suite, lint.
+      - name: compile
+        run: bundle exec rake compile
+      - name: test
+        run: bundle exec rake test
+      - name: rubocop
+        run: bundle exec rubocop
+
+  eslint:
+    name: Demo JS (ESLint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/actioncable-demo/frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx eslint .
+
+  demo:
+    name: Demo (clean-room build + smoke e2e)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+
+      # Build + install the gem exactly as a fresh checkout would.
+      - name: Build the gem
+        run: bundle exec rake compile
+
+      # The demo is a separate bundle that depends on the path gem. This checks
+      # that `bundle install` + `db:prepare` work clean-room, with no
+      # broken-toolchain workarounds; the real Rails migration creates the
+      # Postgres schema.
+      - name: Demo install + db:prepare
+        working-directory: examples/actioncable-demo
+        run: |
+          bundle install
+          bin/rails db:prepare
+      - name: Build frontend bundle
+        working-directory: examples/actioncable-demo/frontend
+        run: bun install && bun run build
+
+      # Boot the server (Postgres-backed audit store) and run a smoke slice of
+      # the e2e suite against it.
+      - name: Smoke e2e
+        working-directory: examples/actioncable-demo
+        run: |
+          AUDIT=1 bin/rails s -p 3777 -P tmp/pids/ci.pid > /tmp/server.log 2>&1 &
+          for i in $(seq 1 60); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3777/docs/demo)" = "200" ] && break
+            sleep 1
+          done
+          cd frontend
+          PORT=3777 bun provider_check.mjs
+          PORT=3777 bun audit_scenarios.mjs
+          PORT=3777 bun audit.mjs

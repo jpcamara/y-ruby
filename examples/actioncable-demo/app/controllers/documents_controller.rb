@@ -9,12 +9,12 @@ class DocumentsController < ApplicationController
     @document_id = params[:id]
   end
 
-  # Server-side read of the live document — ProseMirror JSON extracted
-  # natively from the CRDT, no JavaScript involved. Open in another tab
+  # Server-side read of the live document. The ProseMirror JSON is extracted
+  # from the CRDT in Ruby, with no JavaScript involved. Open it in another tab
   # while editing to watch it change.
   def content
-    # In AUDIT/store-backed mode the document lives in the shared store, not in
-    # this process's memory (under AnyCable the editing happens in a different
+    # In AUDIT/store-backed mode the document lives in the shared store rather
+    # than this process's memory (under AnyCable the editing happens in another
     # process), so read it from the store. Otherwise use the in-memory replica.
     update =
       if ENV["AUDIT"].present?
@@ -29,16 +29,15 @@ class DocumentsController < ApplicationController
     render json: { error: e.message }, status: :unprocessable_entity
   end
 
-  # The authoritative audit log for a document (AUDIT mode): every recorded
-  # change, in order, as base64 CRDT update deltas. Replaying them rebuilds
-  # the document exactly.
+  # The audit log for a document (AUDIT mode): every recorded change, in order,
+  # as base64 CRDT update deltas. Replaying them rebuilds the document.
   def audit
     entries = Store.current.entries(params[:id])
     render json: { count: entries.length, updates: entries }
   end
 
   # Test hook (AUDIT mode only): drive the audit store's behavior so the
-  # end-to-end suite can prove the record-before-distribute guarantee.
+  # end-to-end suite can exercise record-before-distribute.
   #   reset=1        clear this document's log + injected faults
   #   delay_ms=N     make the next writes take N ms (a slow durable store)
   #   fail_once=1    make the next write raise (store unavailable)

@@ -1,7 +1,7 @@
-// In-depth multi-browser concurrent test. Drives REAL Chrome windows (via
-// Playwright) running the actual demo: Tiptap editor + the @y-rb/actioncable
+// In-depth multi-browser concurrent test. Drives real Chrome windows (via
+// Playwright) running the actual demo: Tiptap editor plus the @y-rb/actioncable
 // provider over @rails/actioncable. Each browser context is an isolated user.
-// This exercises the full client stack a real person would use — not a
+// This exercises the full client stack a real person uses, rather than a
 // headless raw-WebSocket simulation.
 //
 //   bin/rails s -p 3777            (optionally a 2nd process for multi-process)
@@ -50,7 +50,7 @@ const waitConverged = async (pages, label) => {
 }
 
 // Move to the end of the doc, start a new paragraph, and type a token with
-// REAL keystrokes (so ProseMirror's input pipeline + Yjs binding are exercised).
+// real keystrokes, so ProseMirror's input pipeline and Yjs binding are exercised.
 const typeNewLine = async (page, token) => {
   await page.evaluate(() => window.__yrb.editor.commands.focus("end"))
   await page.keyboard.press("Enter")
@@ -166,6 +166,6 @@ try {
 }
 
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures} check(s) failed`); process.exit(1) }
-console.log("PASS — real browsers sync correctly through the yrb-lite server")
+if (failures > 0) { console.log(`FAILED: ${failures} check(s) failed`); process.exit(1) }
+console.log("PASS: real browsers sync correctly through the yrb-lite server")
 process.exit(0)

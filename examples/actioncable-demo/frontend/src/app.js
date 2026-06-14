@@ -19,7 +19,7 @@ const user = {
 }
 
 // The standard y-rb provider speaks the y-websocket protocol over an
-// ActionCable subscription — no hand-rolled provider. yrb-lite's server
+// ActionCable subscription, with no hand-rolled provider. yrb-lite's server
 // (YrbLite::Sync) is wire-compatible with it: it accepts the `{ update: ... }`
 // envelope and sends one protocol message per frame.
 const ydoc = new Y.Doc()
@@ -31,7 +31,7 @@ statusEl.textContent = `connecting as ${user.name}…`
 const poll = setInterval(() => {
   if (provider.synced) {
     statusEl.dataset.state = "connected"
-    statusEl.textContent = `synced — editing as ${user.name}`
+    statusEl.textContent = `synced, editing as ${user.name}`
     clearInterval(poll)
   }
 }, 150)

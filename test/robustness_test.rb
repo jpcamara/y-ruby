@@ -3,12 +3,12 @@
 require "test_helper"
 require_relative "fixtures/yjs_fixtures"
 
-# Hostile-input resilience. The native extension decodes attacker-controlled
-# bytes; a Rust panic crossing the FFI boundary would kill the whole process.
-# These tests assert that garbage input degrades to a Ruby exception (or a
-# harmless no-op), never a crash, and never corrupts a good document.
+# The native extension decodes attacker-controlled bytes, and a Rust panic
+# crossing the FFI boundary would take down the whole process. These tests feed
+# it garbage and check that the worst case is a Ruby exception or a no-op,
+# not a crash and not a corrupted document.
 class RobustnessTest < Minitest::Test
-  # A corpus of nasty byte strings to feed every decoder.
+  # A pile of junk byte strings to feed every decoder.
   def garbage_corpus
     rng = Random.new(0xBADC0DE)
     valid = YjsFixtures::TwoDocsMerged::DOC1_UPDATE
@@ -35,8 +35,8 @@ class RobustnessTest < Minitest::Test
       safe { doc.encode_update_message(bytes) }
       safe { doc.prosemirror_json }
     end
-    # If we got here, nothing crashed the process.
-    assert true
+    # Reaching here means nothing crashed the process; the runtime still works.
+    assert_kind_of String, YrbLite::Doc.new.encode_state_vector
   end
 
   def test_awareness_methods_survive_garbage
@@ -50,14 +50,19 @@ class RobustnessTest < Minitest::Test
       safe { awareness.set_local_state(bytes) }
       safe { awareness.remove_clients([rand(1 << 32)]) }
     end
-    assert true
+
+    assert_kind_of Integer, YrbLite::Awareness.new.client_id
   end
 
   def test_extractor_survives_garbage
     garbage_corpus.each do |bytes|
       safe { YrbLite::ProseMirrorExtractor.extract(bytes) }
     end
-    assert true
+
+    # The extractor still produces JSON for a valid document afterward.
+    extracted = YrbLite::ProseMirrorExtractor.extract(YjsFixtures::ProseMirrorDoc::UPDATE)
+
+    assert_equal "doc", extracted["type"]
   end
 
   def test_garbage_does_not_corrupt_a_good_document
@@ -81,6 +86,7 @@ class RobustnessTest < Minitest::Test
     doc.apply_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
     other = YrbLite::Doc.new
     other.apply_update(doc.encode_state_as_update)
+
     assert_equal doc.encode_state_vector, other.encode_state_vector
   end
 
@@ -90,10 +96,12 @@ class RobustnessTest < Minitest::Test
     # Valid, single, well-formed messages get a real kind.
     assert_equal 1, aw.message_kind(YrbLite::Doc.new.sync_step1), "sync step1"
     update = aw.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
+
     assert_equal 2, aw.message_kind(update), "document update"
     presence = YrbLite::Awareness.new
     presence.set_local_state('{"u":1}')
     awareness_msg = presence.encode_awareness_update
+
     assert_equal 3, aw.message_kind(awareness_msg), "awareness"
 
     # Anything an attacker could relay through must be dropped (0).

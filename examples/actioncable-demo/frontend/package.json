@@ -1,9 +1,11 @@
 {
   "name": "actioncable-demo-frontend",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "bun build src/app.js --outfile ../public/app.js --minify",
-    "watch": "bun build src/app.js --outfile ../public/app.js --watch"
+    "watch": "bun build src/app.js --outfile ../public/app.js --watch",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@rails/actioncable": "^8.0.0",
@@ -18,6 +20,9 @@
     "yjs": "^13.6.20"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0",
     "playwright-core": "^1.60.0"
   }
 }

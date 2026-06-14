@@ -2,10 +2,7 @@
 //!
 //! Ported from the original standalone CLI sketch (tools/extract_prosemirror.rs
 //! in the archived FFI repo) into the native extension so extraction happens
-//! in-process — no subprocess, no temp files.
-//!
-//! See docs/PROSEMIRROR.md and docs/ACCURACY.md for the research behind the
-//! ProseMirror <-> Y.Doc mapping.
+//! in-process, with no subprocess and no temp files.
 
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -26,10 +23,10 @@ pub fn extract_from_update(update: &[u8], fragment: Option<&str>) -> Result<Valu
     let doc = Doc::new();
     {
         let update =
-            Update::decode_v1(update).map_err(|e| format!("Failed to decode update: {}", e))?;
+            Update::decode_v1(update).map_err(|e| format!("Failed to decode update: {e}"))?;
         let mut txn = doc.transact_mut();
         txn.apply_update(update)
-            .map_err(|e| format!("Failed to apply update: {}", e))?;
+            .map_err(|e| format!("Failed to apply update: {e}"))?;
     }
     let txn = doc.transact();
     extract_from_txn(&txn, fragment)
@@ -40,15 +37,12 @@ pub fn extract_from_txn<T: ReadTxn>(txn: &T, fragment: Option<&str>) -> Result<V
     let root = match fragment {
         Some(name) => txn
             .get_xml_fragment(name)
-            .ok_or_else(|| format!("No XML fragment named {:?} found", name))?,
+            .ok_or_else(|| format!("No XML fragment named {name:?} found"))?,
         None => DEFAULT_FRAGMENTS
             .iter()
             .find_map(|name| txn.get_xml_fragment(*name))
             .ok_or_else(|| {
-                format!(
-                    "No ProseMirror content found (tried fragments: {:?})",
-                    DEFAULT_FRAGMENTS
-                )
+                format!("No ProseMirror content found (tried fragments: {DEFAULT_FRAGMENTS:?})")
             })?,
     };
 
@@ -213,5 +207,126 @@ fn any_to_json(value: &Any) -> Value {
                     .collect(),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yrs::types::Attrs;
+    use yrs::{Text, Transact, Xml, XmlElementPrelim, XmlFragment, XmlTextPrelim};
+
+    // Build: <prosemirror><heading level="1">Title</heading>
+    //                     <paragraph>Hello <bold>world</bold></paragraph></prosemirror>
+    fn sample_doc() -> Doc {
+        let doc = Doc::new();
+        let frag = doc.get_or_insert_xml_fragment("prosemirror");
+        let mut txn = doc.transact_mut();
+
+        let heading = frag.insert(&mut txn, 0, XmlElementPrelim::empty("heading"));
+        heading.insert_attribute(&mut txn, "level", "1");
+        let htext = heading.insert(&mut txn, 0, XmlTextPrelim::new(""));
+        htext.insert(&mut txn, 0, "Title");
+
+        let para = frag.insert(&mut txn, 1, XmlElementPrelim::empty("paragraph"));
+        let text = para.insert(&mut txn, 0, XmlTextPrelim::new(""));
+        text.insert(&mut txn, 0, "Hello ");
+        let bold = Attrs::from([(Arc::from("bold"), Any::Bool(true))]);
+        text.insert_with_attributes(&mut txn, 6, "world", bold);
+
+        drop(txn);
+        doc
+    }
+
+    #[test]
+    fn extracts_doc_structure_with_attrs_and_marks() {
+        let doc = sample_doc();
+        let txn = doc.transact();
+        let json = extract_from_txn(&txn, None).unwrap();
+
+        assert_eq!(json["type"], "doc");
+        let content = json["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+
+        // heading with attrs
+        assert_eq!(content[0]["type"], "heading");
+        assert_eq!(content[0]["attrs"]["level"], "1");
+        assert_eq!(content[0]["content"][0]["text"], "Title");
+
+        // paragraph: a plain run then a bold run
+        let runs = content[1]["content"].as_array().unwrap();
+        assert_eq!(runs[0]["text"], "Hello ");
+        assert!(runs[0].get("marks").is_none());
+        assert_eq!(runs[1]["text"], "world");
+        assert_eq!(runs[1]["marks"][0]["type"], "bold");
+    }
+
+    #[test]
+    fn extract_from_update_round_trips() {
+        let doc = sample_doc();
+        let update = doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+
+        let from_update = extract_from_update(&update, Some("prosemirror")).unwrap();
+        let from_txn = extract_from_txn(&doc.transact(), Some("prosemirror")).unwrap();
+        assert_eq!(from_update, from_txn);
+    }
+
+    #[test]
+    fn unknown_fragment_is_an_error() {
+        let doc = sample_doc();
+        let txn = doc.transact();
+        assert!(extract_from_txn(&txn, Some("nope")).is_err());
+    }
+
+    #[test]
+    fn marks_mapping() {
+        let truthy_bold = HashMap::from([(Arc::from("bold"), Any::Bool(true))]);
+        assert_eq!(attrs_to_marks(&truthy_bold), vec![json!({"type": "bold"})]);
+
+        // A falsey mark is dropped.
+        let falsey = HashMap::from([(Arc::from("bold"), Any::Bool(false))]);
+        assert!(attrs_to_marks(&falsey).is_empty());
+
+        // A link stored as a plain href string.
+        let link = HashMap::from([(Arc::from("link"), Any::String("https://example.com".into()))]);
+        assert_eq!(
+            attrs_to_marks(&link),
+            vec![json!({"type": "link", "attrs": {"href": "https://example.com"}})]
+        );
+
+        // An unknown mark passes through with its attributes.
+        let custom = HashMap::from([(Arc::from("highlight"), Any::String("yellow".into()))]);
+        assert_eq!(
+            attrs_to_marks(&custom),
+            vec![json!({"type": "highlight", "attrs": "yellow"})]
+        );
+    }
+
+    #[test]
+    fn truthiness_rules() {
+        assert!(is_truthy(&Any::Bool(true)));
+        assert!(!is_truthy(&Any::Bool(false)));
+        assert!(is_truthy(&Any::Number(1.0)));
+        assert!(!is_truthy(&Any::Number(0.0)));
+        assert!(is_truthy(&Any::String("x".into())));
+        assert!(!is_truthy(&Any::String("".into())));
+        assert!(!is_truthy(&Any::String("false".into())));
+        assert!(!is_truthy(&Any::Null));
+    }
+
+    #[test]
+    fn any_to_json_sorts_map_keys() {
+        let map = Any::Map(
+            [
+                ("b".into(), Any::Number(2.0)),
+                ("a".into(), Any::String("x".into())),
+            ]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>()
+            .into(),
+        );
+        assert_eq!(any_to_json(&map), json!({"a": "x", "b": 2.0}));
     }
 }

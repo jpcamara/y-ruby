@@ -1,8 +1,7 @@
-// Proves the record-before-distribute guarantee UNDER ANYCABLE: a change is
-// only published to other clients once it has been authoritatively stored.
-// WS is terminated by anycable-go (WS_PORT); channel logic runs in the RPC
-// server; the store fault controls go through Puma (HTTP_PORT) and reach the
-// RPC process via a shared file.
+// Checks record-before-distribute under AnyCable: a change is only published to
+// other clients once it has been stored. WS is terminated by anycable-go
+// (WS_PORT), channel logic runs in the RPC server, and the store fault controls
+// go through Puma (HTTP_PORT) and reach the RPC process via a shared file.
 import * as Y from "yjs"
 import * as syncProtocol from "y-protocols/sync"
 import * as encoding from "lib0/encoding"
@@ -69,7 +68,7 @@ const control = (room, params) =>
 const auditCount = async (room) => (await (await fetch(`${BASE}/docs/${room}/audit`)).json()).count
 const serverHas = async (room, tok) => JSON.stringify(await (await fetch(`${BASE}/docs/${room}/content`)).json()).includes(tok)
 
-// ===== Scenario 1: slow store — invisible until stored ======================
+// ===== Scenario 1: slow store, invisible until stored =======================
 async function slowStore() {
   console.log("\n--- Slow store: nothing is published until it's stored ---")
   const room = `acg-slow-${process.pid}`
@@ -93,7 +92,7 @@ async function slowStore() {
   a.ws.close(); b.ws.close(); c.ws.close()
 }
 
-// ===== Scenario 2: store failure — nothing leaks ===========================
+// ===== Scenario 2: store failure, nothing leaks ============================
 async function storeFailure() {
   console.log("\n--- Store failure: a rejected change leaks to no one ---")
   const room = `acg-fail-${process.pid}`
@@ -115,6 +114,6 @@ async function storeFailure() {
 await slowStore()
 await storeFailure()
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures}`); process.exit(1) }
-console.log("PASS — under AnyCable, a change reaches other clients ONLY after it is authoritatively stored")
+if (failures > 0) { console.log(`FAILED: ${failures}`); process.exit(1) }
+console.log("PASS: under AnyCable, a change reaches other clients only after it has been stored")
 process.exit(0)

@@ -1,17 +1,17 @@
 // Verifies the real @y-rb/actioncable WebsocketProvider works against the
-// yrb-lite server. The provider's protocol logic (sync + awareness over an
-// ActionCable subscription) is what we're checking; @rails/actioncable's
+// yrb-lite server. We're checking the provider's protocol logic (sync and
+// awareness over an ActionCable subscription). @rails/actioncable's
 // browser-only transport doesn't deliver inbound messages headless, so we give
 // the provider a tiny raw-WebSocket ActionCable consumer instead. In a real
-// browser the standard createConsumer works — that's what the demo uses.
+// browser the standard createConsumer works, which is what the demo uses.
 //
 //   bin/rails s -p 3777
 //   cd frontend && bun provider_check.mjs
 import { createRequire } from "module"
 const require = createRequire(import.meta.url)
 
-// Share ONE yjs instance with the provider (it's CJS) — mixing ESM `import`
-// loads a second yjs and breaks constructor checks.
+// Share a single yjs instance with the provider (it's CJS). Mixing in an ESM
+// `import` loads a second yjs and breaks constructor checks.
 const Y = require("yjs")
 const { WebsocketProvider } = require("@y-rb/actioncable")
 
@@ -125,6 +125,6 @@ check("a late joiner received the full document",
 
 p1.destroy(); p2.destroy(); p3.destroy()
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures} check(s) failed`); process.exit(1) }
-console.log("PASS — the @y-rb/actioncable provider syncs through the yrb-lite server")
+if (failures > 0) { console.log(`FAILED: ${failures} check(s) failed`); process.exit(1) }
+console.log("PASS: the @y-rb/actioncable provider syncs through the yrb-lite server")
 process.exit(0)

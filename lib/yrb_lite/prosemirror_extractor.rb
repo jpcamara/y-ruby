@@ -6,8 +6,7 @@ module YrbLite
   # Extract ProseMirror/Tiptap editor content from Y.Doc data without JavaScript.
   #
   # The conversion runs natively inside the Rust extension (yrs), reading the
-  # same CRDT structures that y-prosemirror reads in the browser. See
-  # docs/PROSEMIRROR.md and docs/ACCURACY.md for the research behind the mapping.
+  # same CRDT structures that y-prosemirror reads in the browser.
   class ProseMirrorExtractor
     # Extract a ProseMirror document from a binary Y.Doc update.
     #

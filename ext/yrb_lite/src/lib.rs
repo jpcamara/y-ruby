@@ -1,8 +1,6 @@
 mod prosemirror;
 
-use magnus::{
-    exception, function, method, prelude::*, Error, RString, Ruby, TryConvert, Value,
-};
+use magnus::{exception, function, method, prelude::*, Error, RString, Ruby, TryConvert, Value};
 use yrs::encoding::read::{Cursor, Read};
 use yrs::sync::protocol::MessageReader;
 use yrs::sync::{Awareness, DefaultProtocol, Message, Protocol, SyncMessage};
@@ -12,19 +10,19 @@ use yrs::{Doc, ReadTxn, Transact};
 
 /// Wrapper around yrs Doc.
 ///
-/// Thread safety: `yrs::Doc` is `Send + Sync` — its `transact()`/`transact_mut()`
-/// acquire an internal RwLock with *blocking* semantics, so concurrent access
-/// from multiple Ruby threads serializes safely instead of panicking. No
-/// interior-mutability wrapper (RefCell etc.) is needed or wanted here: every
-/// method opens and closes its transaction within a single call.
+/// Thread safety: `yrs::Doc` is `Send + Sync`. Its `transact()`/`transact_mut()`
+/// acquire an internal RwLock with blocking semantics, so concurrent access from
+/// multiple Ruby threads serializes safely instead of panicking. There's no
+/// interior-mutability wrapper (RefCell and friends): every method opens and
+/// closes its transaction within a single call.
 #[magnus::wrap(class = "YrbLite::Doc", free_immediately, size)]
 struct RbDoc(Doc);
 
 /// Wrapper around yrs Awareness (which contains a Doc).
 ///
 /// Thread safety: `yrs::sync::Awareness` keeps client states in a `DashMap`
-/// and exposes all functionality through `&self` — it is designed for
-/// multi-threaded server use.
+/// and exposes everything through `&self`, so it's built for multi-threaded
+/// server use.
 #[magnus::wrap(class = "YrbLite::Awareness", free_immediately, size)]
 struct RbAwareness(Awareness);
 
@@ -38,17 +36,18 @@ fn assert_thread_safe() {
     is_send_sync::<Awareness>();
 }
 
-/// Run `f` with the GVL (Global VM Lock) released, allowing other Ruby
-/// threads — including ones calling into this extension — to run in parallel.
+/// Run `f` with the GVL (Global VM Lock) released, so other Ruby threads,
+/// including ones calling into this extension, can run in parallel.
 ///
-/// SAFETY RULES for the closure:
-/// - It must NOT touch any Ruby object or call any Ruby API. Inputs are
-///   copied out of Ruby strings before entering, results are converted to
-///   Ruby objects after returning.
+/// Safety rules for the closure:
+/// - It must not touch any Ruby object or call any Ruby API. Inputs are copied
+///   out of Ruby strings before entering, and results are converted to Ruby
+///   objects after returning.
 /// - It must be `Send` (it runs while other threads own the GVL). `&Doc` and
 ///   `&Awareness` are fine: both types are `Sync` (asserted above).
-/// - Any doc lock it takes is acquired AND released inside the closure, so we
-///   never reacquire the GVL while holding a yrs lock (no lock-order deadlock).
+/// - Any doc lock it takes must be acquired and released inside the closure, so
+///   we never reacquire the GVL while holding a yrs lock and can't deadlock on
+///   lock order.
 ///
 /// Panics inside the closure are caught and re-raised (resumed) after the GVL
 /// is reacquired, where magnus converts them to Ruby exceptions.
@@ -107,6 +106,69 @@ fn copy_bytes(s: RString) -> Vec<u8> {
 
 fn runtime_error(msg: String) -> Error {
     Error::new(exception::runtime_error(), msg)
+}
+
+// ============================================================================
+// Pure protocol helpers (no Ruby, no GVL); unit-tested in the `tests` module.
+// ============================================================================
+
+/// Classify a frame: a non-zero code only for exactly one well-formed message
+/// that consumes the whole buffer (see `RbAwareness::message_kind` for codes).
+fn classify_message(bytes: &[u8]) -> u8 {
+    let mut decoder = DecoderV1::new(Cursor::new(bytes));
+    let msg = match Message::decode(&mut decoder) {
+        Ok(msg) => msg,
+        Err(_) => return 0, // empty or malformed
+    };
+    // Any remaining byte means a second message or trailing garbage.
+    if decoder.read_u8().is_ok() {
+        return 0;
+    }
+    match msg {
+        Message::Sync(SyncMessage::SyncStep1(_)) => 1,
+        Message::Sync(SyncMessage::SyncStep2(_)) | Message::Sync(SyncMessage::Update(_)) => 2,
+        Message::Awareness(_) => 3,
+        Message::AwarenessQuery => 4,
+        _ => 0, // Auth / Custom: not part of our model
+    }
+}
+
+/// Merge the document-update deltas (Update / SyncStep2 payloads) carried by a
+/// frame into one update, or `None` if the frame carries no document change
+/// (a request, an awareness update, or a no-op handshake SyncStep2).
+fn merged_doc_update(bytes: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let mut decoder = DecoderV1::new(Cursor::new(bytes));
+    let mut updates: Vec<Vec<u8>> = Vec::new();
+    for msg in MessageReader::new(&mut decoder) {
+        match msg.map_err(|e| e.to_string())? {
+            Message::Sync(SyncMessage::Update(u)) | Message::Sync(SyncMessage::SyncStep2(u)) => {
+                updates.push(u)
+            }
+            _ => {}
+        }
+    }
+    let merged = match updates.len() {
+        0 => return Ok(None),
+        1 => updates.pop().unwrap(),
+        _ => yrs::merge_updates_v1(&updates).map_err(|e| e.to_string())?,
+    };
+    let update = yrs::Update::decode_v1(&merged).map_err(|e| e.to_string())?;
+    if update.state_vector().is_empty() && update.delete_set().is_empty() {
+        return Ok(None); // no-op (e.g. the empty SyncStep2 in an opening handshake)
+    }
+    Ok(Some(merged))
+}
+
+/// Collect the awareness client IDs referenced by a frame's awareness messages.
+fn awareness_client_ids_in(bytes: &[u8]) -> Result<Vec<u64>, String> {
+    let mut decoder = DecoderV1::new(Cursor::new(bytes));
+    let mut ids = Vec::new();
+    for msg in MessageReader::new(&mut decoder) {
+        if let Message::Awareness(update) = msg.map_err(|e| e.to_string())? {
+            ids.extend(update.clients.keys().copied());
+        }
+    }
+    Ok(ids)
 }
 
 // ============================================================================
@@ -224,16 +286,16 @@ impl RbDoc {
                         }
                         SyncMessage::SyncStep2(update_bytes) => {
                             // Apply the update
-                            let update = yrs::Update::decode_v1(&update_bytes)
-                                .map_err(|e| e.to_string())?;
+                            let update =
+                                yrs::Update::decode_v1(&update_bytes).map_err(|e| e.to_string())?;
                             let mut txn = doc.transact_mut();
                             txn.apply_update(update).map_err(|e| e.to_string())?;
                             Ok((0, 1, Vec::new()))
                         }
                         SyncMessage::Update(update_bytes) => {
                             // Apply the update
-                            let update = yrs::Update::decode_v1(&update_bytes)
-                                .map_err(|e| e.to_string())?;
+                            let update =
+                                yrs::Update::decode_v1(&update_bytes).map_err(|e| e.to_string())?;
                             let mut txn = doc.transact_mut();
                             txn.apply_update(update).map_err(|e| e.to_string())?;
                             Ok((0, 2, Vec::new()))
@@ -282,7 +344,10 @@ fn extract_prosemirror_json(args: &[Value]) -> Result<String, Error> {
     if args.is_empty() || args.len() > 2 {
         return Err(Error::new(
             exception::arg_error(),
-            format!("wrong number of arguments (given {}, expected 1..2)", args.len()),
+            format!(
+                "wrong number of arguments (given {}, expected 1..2)",
+                args.len()
+            ),
         ));
     }
     let update: RString = TryConvert::try_convert(args[0])?;
@@ -472,85 +537,32 @@ impl RbAwareness {
     /// connection closes.
     fn awareness_client_ids(&self, data: RString) -> Result<Vec<u64>, Error> {
         let data_bytes = copy_bytes(data);
-        nogvl(move || -> Result<Vec<u64>, String> {
-            let mut decoder = DecoderV1::new(Cursor::new(&data_bytes));
-            let mut ids = Vec::new();
-            for msg in MessageReader::new(&mut decoder) {
-                if let Message::Awareness(update) = msg.map_err(|e| e.to_string())? {
-                    ids.extend(update.clients.keys().copied());
-                }
-            }
-            Ok(ids)
-        })
-        .map_err(runtime_error)
+        nogvl(move || awareness_client_ids_in(&data_bytes)).map_err(runtime_error)
     }
 
-    /// Classify a frame for safe routing/relay. Returns a code ONLY when the
-    /// frame is exactly one well-formed message that consumes the whole buffer
-    /// — so a malformed, truncated, multi-message, or trailing-garbage frame
-    /// (which a malicious client could craft to disrupt others if relayed) is
-    /// rejected up front:
-    ///   0 = drop (malformed / multiple / unknown / empty)
-    ///   1 = sync step1   (a request — respond, do not relay)
-    ///   2 = sync step2/update (a document change — record/apply/relay)
-    ///   3 = awareness    (presence — relay)
-    ///   4 = awareness query (a request — respond, do not relay)
+    /// Classify a frame for safe routing and relay. Returns a code only when
+    /// the frame is exactly one well-formed message that consumes the whole
+    /// buffer, so a malformed, truncated, multi-message, or trailing-garbage
+    /// frame (which a malicious client could craft to disrupt others if
+    /// relayed) is rejected up front:
+    ///   0 = drop (malformed, multiple, unknown, or empty)
+    ///   1 = sync step1       (a request: respond, do not relay)
+    ///   2 = sync step2/update (a document change: record/apply/relay)
+    ///   3 = awareness        (presence: relay)
+    ///   4 = awareness query  (a request: respond, do not relay)
     fn message_kind(&self, data: RString) -> u8 {
         let data_bytes = copy_bytes(data);
-        nogvl(move || {
-            let mut decoder = DecoderV1::new(Cursor::new(&data_bytes));
-            let msg = match Message::decode(&mut decoder) {
-                Ok(msg) => msg,
-                Err(_) => return 0, // empty or malformed
-            };
-            // Any remaining byte means a second message or trailing garbage —
-            // reject (read_u8 fails only at a clean end of buffer).
-            if decoder.read_u8().is_ok() {
-                return 0;
-            }
-            match msg {
-                Message::Sync(SyncMessage::SyncStep1(_)) => 1,
-                Message::Sync(SyncMessage::SyncStep2(_)) => 2,
-                Message::Sync(SyncMessage::Update(_)) => 2,
-                Message::Awareness(_) => 3,
-                Message::AwarenessQuery => 4,
-                _ => 0, // Auth / Custom: not part of our model — don't relay
-            }
-        })
+        nogvl(move || classify_message(&data_bytes))
     }
 
-    /// Extract the document-update delta carried by a protocol message —
-    /// the payloads of any Update / SyncStep2 sub-messages, merged into a
-    /// single update. Returns nil if the message carries no document change
-    /// (e.g. a SyncStep1 request or an awareness update). The strict audit
+    /// Extract the document-update delta carried by a protocol message: the
+    /// payloads of any Update or SyncStep2 sub-messages, merged into a single
+    /// update. Returns nil if the message carries no document change (for
+    /// instance a SyncStep1 request or an awareness update). The strict audit
     /// path records this exact delta before applying it.
     fn update_from_message(&self, data: RString) -> Result<Option<RString>, Error> {
         let data_bytes = copy_bytes(data);
-        let merged = nogvl(move || -> Result<Option<Vec<u8>>, String> {
-            let mut decoder = DecoderV1::new(Cursor::new(&data_bytes));
-            let mut updates: Vec<Vec<u8>> = Vec::new();
-            for msg in MessageReader::new(&mut decoder) {
-                match msg.map_err(|e| e.to_string())? {
-                    Message::Sync(SyncMessage::Update(u))
-                    | Message::Sync(SyncMessage::SyncStep2(u)) => updates.push(u),
-                    _ => {}
-                }
-            }
-            let bytes = match updates.len() {
-                0 => return Ok(None),
-                1 => updates.pop().unwrap(),
-                _ => yrs::merge_updates_v1(&updates).map_err(|e| e.to_string())?,
-            };
-            // A SyncStep2 with nothing new (e.g. the empty one every client
-            // sends during its opening handshake) carries no document change.
-            // Don't treat it as a recordable/applicable change.
-            let update = yrs::Update::decode_v1(&bytes).map_err(|e| e.to_string())?;
-            if update.state_vector().is_empty() && update.delete_set().is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(bytes))
-        })
-        .map_err(runtime_error)?;
+        let merged = nogvl(move || merged_doc_update(&data_bytes)).map_err(runtime_error)?;
         Ok(merged.map(|b| binary_string(&b)))
     }
 
@@ -599,7 +611,10 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     doc_class.define_singleton_method("new", function!(RbDoc::new, -1))?;
     doc_class.define_method("client_id", method!(RbDoc::client_id, 0))?;
     doc_class.define_method("guid", method!(RbDoc::guid, 0))?;
-    doc_class.define_method("encode_state_vector", method!(RbDoc::encode_state_vector, 0))?;
+    doc_class.define_method(
+        "encode_state_vector",
+        method!(RbDoc::encode_state_vector, 0),
+    )?;
     doc_class.define_method(
         "encode_state_as_update",
         method!(RbDoc::encode_state_as_update, -1),
@@ -672,4 +687,116 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.const_set("MSG_SYNC_UPDATE", 2u8)?;
 
     Ok(())
+}
+
+// ============================================================================
+// Tests for the pure protocol helpers (run with `cargo test`, no Ruby VM)
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yrs::sync::Awareness;
+    use yrs::Text;
+
+    fn text_update(content: &str) -> Vec<u8> {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("content");
+        text.insert(&mut doc.transact_mut(), 0, content);
+        let update = doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+        update
+    }
+
+    fn update_frame(content: &str) -> Vec<u8> {
+        Message::Sync(SyncMessage::Update(text_update(content))).encode_v1()
+    }
+
+    fn step1_frame() -> Vec<u8> {
+        Message::Sync(SyncMessage::SyncStep1(yrs::StateVector::default())).encode_v1()
+    }
+
+    fn awareness_frame(client_id: u64) -> Vec<u8> {
+        let awareness = Awareness::new(Doc::with_client_id(client_id));
+        awareness
+            .set_local_state(serde_json::json!({ "user": "alice" }))
+            .unwrap();
+        Message::Awareness(awareness.update().unwrap()).encode_v1()
+    }
+
+    #[test]
+    fn classify_accepts_clean_single_messages() {
+        assert_eq!(classify_message(&step1_frame()), 1);
+        assert_eq!(classify_message(&update_frame("hi")), 2);
+        assert_eq!(classify_message(&awareness_frame(7)), 3);
+        assert_eq!(classify_message(&Message::AwarenessQuery.encode_v1()), 4);
+    }
+
+    #[test]
+    fn classify_rejects_unsafe_frames() {
+        assert_eq!(classify_message(b""), 0, "empty");
+        assert_eq!(classify_message(&[0xff, 0xff, 0xff]), 0, "garbage");
+        assert_eq!(classify_message(&[0x63, 0x63, 0x63]), 0, "unknown type");
+
+        let mut two = update_frame("a");
+        two.extend(awareness_frame(1)); // two messages packed together
+        assert_eq!(classify_message(&two), 0, "multi-message");
+
+        let mut trailing = update_frame("a");
+        trailing.extend_from_slice(&[0xde, 0xad]);
+        assert_eq!(classify_message(&trailing), 0, "trailing garbage");
+
+        let frame = update_frame("hello");
+        assert_eq!(classify_message(&frame[..frame.len() / 2]), 0, "truncated");
+    }
+
+    #[test]
+    fn merged_doc_update_extracts_and_skips_no_ops() {
+        // A document update yields a delta that reconstructs the content.
+        let delta = merged_doc_update(&update_frame("hello"))
+            .unwrap()
+            .expect("a document update");
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&delta).unwrap())
+            .unwrap();
+        // The delta carried real content, so applying it advances the doc.
+        assert!(!doc.transact().state_vector().is_empty());
+
+        // A SyncStep1 request carries no document change.
+        assert!(merged_doc_update(&step1_frame()).unwrap().is_none());
+
+        // An empty SyncStep2 (no new structs) is a no-op.
+        let empty = Message::Sync(SyncMessage::SyncStep2(
+            Doc::new()
+                .transact()
+                .encode_state_as_update_v1(&yrs::StateVector::default()),
+        ))
+        .encode_v1();
+        assert!(merged_doc_update(&empty).unwrap().is_none());
+    }
+
+    #[test]
+    fn merged_doc_update_merges_multiple_updates() {
+        // Two updates from different clients packed in one frame merge into one.
+        let mut frame = update_frame("a");
+        frame.extend(update_frame("b"));
+        let merged = merged_doc_update(&frame).unwrap().expect("merged update");
+
+        // The merged update must decode cleanly as a single update.
+        assert!(yrs::Update::decode_v1(&merged).is_ok());
+    }
+
+    #[test]
+    fn awareness_client_ids_are_collected() {
+        assert_eq!(
+            awareness_client_ids_in(&awareness_frame(111)).unwrap(),
+            vec![111]
+        );
+        // A document frame has no awareness client ids.
+        assert!(awareness_client_ids_in(&update_frame("x"))
+            .unwrap()
+            .is_empty());
+    }
 }

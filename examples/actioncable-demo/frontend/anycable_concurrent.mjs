@@ -1,7 +1,7 @@
 // Concurrent multi-client storm under AnyCable (store-backed server). N raw-WS
-// clients connect to anycable-go (WS_PORT), edit concurrently, then we assert
-// they all converge AND the shared store (read via Puma's /content on
-// HTTP_PORT — a different process) reflects every edit.
+// clients connect to anycable-go (WS_PORT), edit concurrently, then we check
+// that they all converge and that the shared store reflects every edit. The
+// store is read via Puma's /content on HTTP_PORT, which is a different process.
 import * as Y from "yjs"
 import * as syncProtocol from "y-protocols/sync"
 import * as encoding from "lib0/encoding"
@@ -99,7 +99,7 @@ check("all clients converged byte-for-byte", clients.every((c) => {
 const t0 = clients[0].text()
 check(`every token present across clients (${tokens.length})`, tokens.every((t) => t0.includes(t)))
 
-// The store (Puma /content, a DIFFERENT process than the RPC server) agrees.
+// The store (Puma /content, a separate process from the RPC server) agrees.
 const res = await fetch(`http://localhost:${HTTP_PORT}/docs/${ROOM}/content`)
 const json = await res.json()
 const srv = JSON.stringify(json)
@@ -107,6 +107,6 @@ check("Puma /content reflects every edit (cross-process via store)", tokens.ever
 
 clients.forEach((c) => c.ws.close())
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures}`); process.exit(1) }
-console.log(`PASS — ${CLIENTS} concurrent clients under AnyCable: converged, store has all ${tokens.length} edits`)
+if (failures > 0) { console.log(`FAILED: ${failures}`); process.exit(1) }
+console.log(`PASS: ${CLIENTS} concurrent clients under AnyCable: converged, store has all ${tokens.length} edits`)
 process.exit(0)

@@ -4,9 +4,9 @@ require "json"
 require "fileutils"
 
 # File-based fault injection shared by the stores, so the end-to-end tests can
-# make a store slow or fail and prove record-before-distribute. It's file-based
-# because the control endpoint runs in Puma while `record` runs in the AnyCable
-# RPC server — different processes.
+# make a store slow or fail and exercise record-before-distribute. It goes
+# through a file because the control endpoint runs in Puma while `record` runs
+# in the AnyCable RPC server, which is a separate process.
 module Fault
   @mutex = Mutex.new
 

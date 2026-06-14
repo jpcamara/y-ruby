@@ -3,17 +3,17 @@
 require "base64"
 require "fileutils"
 
-# A durable, append-only audit log of every document change — the demo's
-# stand-in for whatever Wealthbox records to. yrb-lite's `on_change` hook
-# calls `record` *before* the change is applied or broadcast, and serialized
-# per document, so this log is the authoritative order of changes.
+# A durable, append-only audit log of every document change; the demo's
+# stand-in for whatever a real app would record to. yrb-lite's `on_change` hook
+# calls `record` before the change is applied or broadcast, serialized per
+# document, so the log keeps changes in the order they happened.
 #
-# Each entry is one CRDT update delta (base64). Replaying the entries in
-# order onto a fresh Y.Doc reconstructs the document exactly.
+# Each entry is one CRDT update delta (base64). Replaying the entries in order
+# onto a fresh Y.Doc reconstructs the document.
 #
-# It also supports fault injection (delay / fail-once) so the end-to-end
-# tests can drive the store's behavior and prove that no other client ever
-# sees a change before it's stored.
+# It also supports fault injection (delay, fail-once) so the end-to-end tests
+# can make the store misbehave and check that no other client sees a change
+# before it's stored.
 class AuditLog
   @locks = Hash.new { |h, k| h[k] = Mutex.new } # per-document, so different
   @locks_guard = Mutex.new                       # docs record concurrently
@@ -24,9 +24,9 @@ class AuditLog
     # successful return means the change is durable. Raising here (e.g. disk
     # full) makes yrb-lite reject the change: it is never applied or sent.
     #
-    # The on-disk log is the shared source of truth — every server process
-    # appends to the same file (O_APPEND is atomic), so the audit history is
-    # global across a multi-process deployment, not per-process.
+    # Every server process appends to the same file (O_APPEND is atomic), so
+    # the history is shared across a multi-process deployment rather than living
+    # per-process.
     def record(key, update)
       Fault.simulate(key)
 
@@ -68,7 +68,7 @@ class AuditLog
           doc.apply_update(Base64.strict_decode64(line))
           applied += 1
         rescue StandardError
-          next # torn/partial line from a crash mid-append — skip it
+          next # torn/partial line from a crash mid-append; skip it
         end
       end
       applied.zero? ? nil : doc.encode_state_as_update

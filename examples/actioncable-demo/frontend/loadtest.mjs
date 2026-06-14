@@ -1,7 +1,7 @@
 // Load test for yrb-lite. Spawns many WebSocket clients (raw ActionCable
-// protocol — far lighter than browsers) across rooms, drives a sustained edit
-// rate, and measures: sustained throughput (edits recorded/sec), propagation
-// latency under load (edit -> visible on another client), saturation (sent vs
+// protocol, far lighter than browsers) across rooms, drives a sustained edit
+// rate, and measures sustained throughput (edits recorded/sec), propagation
+// latency under load (edit to visible on another client), saturation (sent vs
 // recorded), errors, and final convergence.
 //
 //   WS_PORT=8080 HTTP_PORT=3777 CLIENTS=100 ROOMS=10 DURATION=20 RATE=10 \
@@ -107,7 +107,7 @@ const auditCount = async (room) => {
   try { return (await (await fetch(`http://localhost:${HTTP_PORT}/docs/${room}/audit`)).json()).count }
   catch { return 0 }
 }
-// Memory mode has no audit log — count applied paragraphs from /content instead.
+// Memory mode has no audit log, so count applied paragraphs from /content.
 const serverParagraphs = async (room) => {
   try {
     const j = await (await fetch(`http://localhost:${HTTP_PORT}/docs/${room}/content`)).json()
@@ -144,10 +144,10 @@ await sleep(Number(process.env.DRAIN || 4) * 1000)
 const recorded = (await Promise.all(rooms.map(STORE ? auditCount : serverParagraphs))).reduce((a, b) => a + b, 0)
 const paragraphs = (doc) => [...doc.getXmlFragment("default").toArray()].filter((p) => p.length).length
 
-// Rigorous integrity check: in EVERY room, every client must be byte-identical
-// to every other AND each client's paragraph count must equal the server's
-// stored doc. If any client held an un-synced local edit, this fails — that's
-// how we'd detect a dropped/lost edit (vs one that was simply never sent).
+// Integrity check: in every room, every client must be byte-identical to every
+// other, and each client's paragraph count must equal the server's stored doc.
+// If any client held an un-synced local edit, this fails, which is how we'd
+// catch a dropped edit (as opposed to one that was simply never sent).
 let converged = true
 let clientParaTotal = 0
 let serverParaTotal = 0
@@ -168,13 +168,13 @@ console.log(`duration (wall):      ${wall.toFixed(1)}s`)
 const keptUp = serverParaTotal / metrics.edits
 console.log(`edits attempted:      ${metrics.edits}  (${(metrics.edits / wall).toFixed(0)}/s)`)
 console.log(`edits applied:        ${serverParaTotal}  (${(metrics.edits / wall).toFixed(0)}/s attempted; ${(keptUp * 100).toFixed(1)}% applied in real time)`)
-console.log(`store entries:        ${recorded}  (delta messages — fewer than edits, since Yjs batches)`)
+console.log(`store entries:        ${recorded}  (delta messages, fewer than edits since Yjs batches)`)
 console.log(`steady-state:         ${keptUp >= 0.97 && pct(metrics.latencies, 95) < 1000 ? "KEEPING UP (low latency)" : "SATURATED (backlog; drains without loss)"}`)
 console.log(`ws frames sent/recv:  ${metrics.sent} / ${metrics.recv}`)
 console.log(`propagation latency:  p50 ${pct(metrics.latencies, 50).toFixed(0)}ms  p95 ${pct(metrics.latencies, 95).toFixed(0)}ms  p99 ${pct(metrics.latencies, 99).toFixed(0)}ms  max ${pct(metrics.latencies, 100).toFixed(0)}ms  (n=${metrics.latencies.length})`)
 console.log(`errors:               ${metrics.errors}`)
 console.log(`doc paragraphs:       clients ${clientParaTotal} vs server ${serverParaTotal}`)
-console.log(`integrity:            ${converged ? "OK — every client == server in every room (no loss)" : "MISMATCH"}`)
+console.log(`integrity:            ${converged ? "OK: every client == server in every room (no loss)" : "MISMATCH"}`)
 console.log("=======================================")
 
 clients.forEach((c) => c.ws.close())

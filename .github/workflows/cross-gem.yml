@@ -1,0 +1,54 @@
+name: Precompiled gems
+
+# Builds native precompiled gems for every supported platform/Ruby so users
+# can `gem install yrb-lite` with NO Rust toolchain. Runs on a version tag (or
+# manually). Publishing to RubyGems is a deliberate manual step (see below).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  ci-data:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.fetch.outputs.result }}
+    steps:
+      - uses: oxidize-rb/actions/fetch-ci-data@v1
+        id: fetch
+        with:
+          # x64-mingw32 is legacy 32-bit Windows (pre-RubyInstaller-ucrt); we
+          # target Ruby 3.1+, where modern Windows uses the ucrt platforms.
+          supported-ruby-platforms: |
+            exclude: [arm-linux, x64-mingw32]
+          stable-ruby-versions: |
+            exclude: [head]
+
+  cross-gem:
+    name: Compile gem for ${{ matrix.platform }}
+    needs: ci-data
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.ci-data.outputs.result).supported-ruby-platforms }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - uses: oxidize-rb/actions/cross-gem@v1
+        id: cross-gem
+        with:
+          platform: ${{ matrix.platform }}
+          ruby-versions: "3.1, 3.2, 3.3, 3.4"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-gem-${{ matrix.platform }}
+          path: ${{ steps.cross-gem.outputs.gem-path }}
+          if-no-files-found: error
+
+  # After this workflow, download the artifacts and `gem push` each .gem
+  # (plus a source gem via `rake build`). Kept manual so a tag never publishes
+  # without a human + RubyGems credentials.

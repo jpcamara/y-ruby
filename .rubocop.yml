@@ -1,0 +1,65 @@
+plugins:
+  - rubocop-minitest
+  - rubocop-rake
+
+AllCops:
+  TargetRubyVersion: 3.0
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - "ext/**/*"          # Rust extension
+    - "tmp/**/*"
+    - "vendor/**/*"
+    - "pkg/**/*"
+    - "bench/**/*"        # throwaway benchmark scripts
+    - "examples/**/*"     # the demo app is illustrative, not gem code
+    - "test/fixtures/**/*"
+
+# A library doesn't need a top-level doc comment on every class/module.
+Style/Documentation:
+  Enabled: false
+
+# The codebase uses double quotes throughout.
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+Metrics/MethodLength:
+  Max: 30
+  Exclude:
+    - "test/**/*"
+Metrics/AbcSize:
+  Max: 32
+  Exclude:
+    - "test/**/*"
+Metrics/CyclomaticComplexity:
+  Max: 12
+Metrics/PerceivedComplexity:
+  Max: 12
+Metrics/ModuleLength:
+  Max: 250
+Layout/LineLength:
+  Max: 120
+  Exclude:
+    - "*.gemspec" # long description / metadata lines
+
+# Tests are naturally long and assertion-dense; don't fight that.
+Metrics/BlockLength:
+  Exclude:
+    - "test/**/*"
+    - "*.gemspec"
+Metrics/ClassLength:
+  Exclude:
+    - "test/**/*"
+Minitest/MultipleAssertions:
+  Enabled: false
+
+# Dev dependencies in the gemspec are a fine, common convention.
+Gemspec/DevelopmentDependencies:
+  Enabled: false
+
+# Intentional dasherized shim so Bundler can auto-require the gem by its name.
+Naming/FileName:
+  Exclude:
+    - "lib/yrb-lite.rb"

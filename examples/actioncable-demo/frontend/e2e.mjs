@@ -1,11 +1,11 @@
 // End-to-end test: two simulated Yjs clients sync through the Rails server
-// over ActionCable's raw WebSocket protocol — no browser required.
+// over ActionCable's raw WebSocket protocol, with no browser required.
 //
 //   1. Boot the Rails server:  bin/rails s -p 3777
 //   2. Run:                    cd frontend && bun e2e.mjs
 //
-// Asserts: document convergence in both directions, awareness propagation,
-// and the server-side ProseMirror extraction endpoint.
+// Checks document convergence in both directions, awareness propagation, and
+// the server-side ProseMirror extraction endpoint.
 import * as Y from "yjs"
 import * as awarenessProtocol from "y-protocols/awareness"
 import * as syncProtocol from "y-protocols/sync"
@@ -174,10 +174,10 @@ if (!texts.includes("Hello from Alice") || !texts.includes("Hi from Bob")) {
 }
 console.log("ok: server-side ProseMirror extraction matches both edits")
 
-// Presence reaping: when a client disconnects, the server must clear its
-// awareness state and tell the others promptly — not leave a ghost cursor
-// until the client-side ~30s timeout. Bob takes presence too so we can prove
-// only Alice's state is removed.
+// Presence reaping: when a client disconnects, the server should clear its
+// awareness state and tell the others right away, rather than leaving a ghost
+// cursor until the client-side ~30s timeout. Bob takes presence too so we can
+// check that only Alice's state is removed.
 bob.setPresence({ user: { name: "Bob", color: "#00f" } })
 await waitFor("alice sees bob's presence", () =>
   [...alice.awareness.getStates().values()].some((s) => s.user?.name === "Bob")
@@ -195,5 +195,5 @@ if (![...bob.awareness.getStates().values()].some((s) => s.user?.name === "Bob")
 console.log("ok: only the departed client's presence was cleared")
 
 bob.close()
-console.log(`\nPASS — room ${ROOM}`)
+console.log(`\nPASS: room ${ROOM}`)
 process.exit(0)

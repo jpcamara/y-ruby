@@ -3,7 +3,7 @@
 # Torture test: sustained parallel contention on shared native objects.
 #
 # With the GVL released, writer threads genuinely contend on the doc's
-# internal RwLock in parallel — this hammers that path for DURATION seconds
+# internal RwLock in parallel. This hammers that path for DURATION seconds
 # and asserts CRDT convergence afterward. Run with a larger thread count
 # than cores to also exercise queueing under oversubscription.
 #

@@ -1,17 +1,17 @@
 # frozen_string_literal: true
 
-# Collaborative document channel — the whole y-websocket protocol is three
-# lines thanks to YrbLite::Sync. Documents live in memory; add on_load /
-# on_save callbacks to persist them.
+# Collaborative document channel. The whole y-websocket protocol is the three
+# lines of YrbLite::Sync below. Documents live in memory; add on_load/on_save
+# callbacks to persist them.
 class DocumentChannel < ApplicationCable::Channel
   include YrbLite::Sync
 
-  # Opt-in authoritative audit mode (AUDIT=1): record every change durably,
-  # in a single total order, BEFORE it is applied or broadcast. Without this
-  # the channel uses the default fast path.
+  # Opt-in audit mode (AUDIT=1): record every change durably, in a single total
+  # order, before it's applied or broadcast. Without it, the channel uses the
+  # default fast path.
   #
-  # on_load rebuilds a document from its audit log, so a document survives an
-  # eviction *or a server crash* — the fsync'd log is the source of truth.
+  # on_load rebuilds a document from its audit log, so it survives an eviction
+  # or a server crash. The fsync'd log is where the state actually lives.
   if ENV["AUDIT"].present?
     on_load  { |key| Store.current.replay(key) }
     on_change { |key, update| Store.current.record(key, update) }

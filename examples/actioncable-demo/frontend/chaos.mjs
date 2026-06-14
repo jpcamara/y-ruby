@@ -1,7 +1,7 @@
 // Hostile-input chaos test. A vandal client sprays malformed frames at the
 // server (bad base64, random bytes, truncated/oversized protocol messages,
 // unknown types, spoofed awareness, broken envelopes) while good clients edit
-// normally. Asserts: the server never dies, good clients still converge, a
+// normally. Checks that the server never dies, good clients still converge, a
 // second room is unaffected, and (in AUDIT mode) only valid changes are logged.
 //
 //   AUDIT=1 bin/rails s -p 3777
@@ -181,12 +181,12 @@ let byGood = true
 for (let i = 1; i <= EDITS; i++) if (!bystander.text().includes(`BY-${i}`)) byGood = false
 check("the bystander room was completely unaffected", byGood)
 
-// Only valid changes were recorded — the garbage never became a change.
+// Only the valid edits were recorded; none of the garbage became a change.
 const count = await auditCount(room)
 check(`only valid changes were logged (${count} == ${EDITS * 2})`, count === EDITS * 2)
 
 a.ws.close(); b.ws.close(); bystander.ws.close(); vandal.ws.close()
 console.log("")
-if (failures > 0) { console.log(`FAILED — ${failures} check(s) failed`); process.exit(1) }
-console.log("PASS — survived the barrage: process alive, good data intact, garbage never logged")
+if (failures > 0) { console.log(`FAILED: ${failures} check(s) failed`); process.exit(1) }
+console.log("PASS: survived the barrage: process alive, good data intact, garbage never logged")
 process.exit(0)
