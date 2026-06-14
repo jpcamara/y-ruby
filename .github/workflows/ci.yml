@@ -56,8 +56,12 @@ jobs:
       - run: bunx eslint .
 
   demo:
-    name: Demo (clean-room build + smoke e2e)
+    name: Demo e2e (Ruby ${{ matrix.ruby }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.4", "4.0"]
     services:
       postgres:
         image: postgres:16
@@ -77,7 +81,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.4"
+          ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
