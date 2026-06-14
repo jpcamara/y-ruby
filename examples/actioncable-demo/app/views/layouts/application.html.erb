@@ -8,6 +8,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
+    <%# Tells createConsumer() where the cable server is. Under AnyCable set
+        CABLE_URL to anycable-go's URL; otherwise Rails defaults to /cable. %>
+    <%= action_cable_meta_tag %>
 
     <%= yield :head %>
 

@@ -325,6 +325,19 @@ impl RbAwareness {
         self.0.doc().guid().to_string()
     }
 
+    /// A standalone SyncStep1 message (the server's state vector). Sent as its
+    /// own frame in the opening handshake so providers that parse one message
+    /// per frame (e.g. @y-rb/actioncable) handle it correctly.
+    fn sync_step1(&self) -> RString {
+        let awareness = &self.0;
+        let encoded = nogvl(move || {
+            let txn = awareness.doc().transact();
+            let sv = txn.state_vector();
+            Message::Sync(SyncMessage::SyncStep1(sv)).encode_v1()
+        });
+        binary_string(&encoded)
+    }
+
     /// Create initial sync messages to send when connection opens.
     /// Returns binary data containing SyncStep1 + Awareness update.
     fn start(&self) -> Result<RString, Error> {
@@ -616,6 +629,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     awareness_class.define_method("client_id", method!(RbAwareness::client_id, 0))?;
     awareness_class.define_method("guid", method!(RbAwareness::guid, 0))?;
     awareness_class.define_method("start", method!(RbAwareness::start, 0))?;
+    awareness_class.define_method("sync_step1", method!(RbAwareness::sync_step1, 0))?;
     awareness_class.define_method("handle", method!(RbAwareness::handle, 1))?;
     awareness_class.define_method("encode_update", method!(RbAwareness::encode_update, 1))?;
     awareness_class.define_method(

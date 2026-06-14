@@ -13,10 +13,18 @@ class DocumentsController < ApplicationController
   # natively from the CRDT, no JavaScript involved. Open in another tab
   # while editing to watch it change.
   def content
-    awareness = YrbLite::Sync.registry[params[:id]]
-    return render json: { error: "No such document" }, status: :not_found unless awareness
+    # In AUDIT/store-backed mode the document lives in the shared store, not in
+    # this process's memory (under AnyCable the editing happens in a different
+    # process), so read it from the store. Otherwise use the in-memory replica.
+    update =
+      if ENV["AUDIT"].present?
+        AuditLog.replay(params[:id])
+      else
+        YrbLite::Sync.registry[params[:id]]&.encode_state_as_update
+      end
+    return render json: { error: "No such document" }, status: :not_found unless update
 
-    render json: YrbLite::ProseMirrorExtractor.extract(awareness.encode_state_as_update)
+    render json: YrbLite::ProseMirrorExtractor.extract(update)
   rescue RuntimeError => e
     render json: { error: e.message }, status: :unprocessable_entity
   end

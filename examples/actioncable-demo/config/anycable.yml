@@ -1,0 +1,10 @@
+default: &default
+  broadcast_adapter: redis
+  redis_url: redis://localhost:6379/15
+  rpc_host: "127.0.0.1:50051"
+
+development:
+  <<: *default
+
+production:
+  <<: *default

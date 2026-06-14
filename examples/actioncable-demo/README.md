@@ -47,10 +47,18 @@ document key. ActionCable's worker threads call into it concurrently — safe
 because yrb-lite's native types are `Send + Sync` and release the GVL during
 CRDT work. Add `on_load`/`on_save` callbacks to persist documents.
 
-**Client** — [`frontend/src/provider.js`](frontend/src/provider.js) is a
-~150-line Yjs provider that speaks the standard y-protocols binary messages
-(base64-encoded) over an ActionCable subscription. Tiptap's Collaboration and
-CollaborationCursor extensions plug into it like any other provider.
+**Client** — uses the standard [`@y-rb/actioncable`](https://www.npmjs.com/package/@y-rb/actioncable)
+`WebsocketProvider` (no hand-rolled provider). yrb-lite's server is
+wire-compatible with it: it accepts the provider's `{ update: ... }` envelope
+(and its own `{ m: ... }`) and sends one protocol message per frame. Tiptap's
+Collaboration and CollaborationCursor extensions plug into it directly.
+
+```js
+import { createConsumer } from "@rails/actioncable"
+import { WebsocketProvider } from "@y-rb/actioncable"
+
+const provider = new WebsocketProvider(ydoc, createConsumer(), "DocumentChannel", { id: documentId })
+```
 
 ## End-to-end test
 
@@ -65,6 +73,31 @@ catch-up via the server, bidirectional live updates, awareness propagation,
 byte-for-byte CRDT convergence, the server-side extraction endpoint, and
 prompt presence reaping when a client disconnects (only the departed client's
 cursor is cleared, well under the client-side timeout).
+
+To verify the standard provider specifically, `bun provider_check.mjs` drives
+the real `@y-rb/actioncable` `WebsocketProvider` against the server (document
+sync both directions, presence, byte-for-byte convergence, late-join).
+
+### Real browser tests (Playwright)
+
+These drive actual Chrome windows running the real bundle (Tiptap + the
+`@y-rb/actioncable` provider) — the full stack a person uses. They use
+`playwright-core` against system Chrome (no Chromium download). Pass
+`PORTS=3777,3778` to split browsers across two server processes.
+
+```bash
+bin/rails s -p 3777
+cd frontend && bun multi_browser.mjs   # 4 browsers: round-trip, presence,
+                                       # late-join, reload/reconnect, storm
+bun four_browsers.mjs                  # 4 browsers typing at once, per-keystroke
+                                       # accounting (incl. same-position storm)
+```
+
+`four_browsers.mjs` has each browser type its own digit simultaneously, then
+asserts every browser's document is identical and every keystroke from every
+browser survived (counted per contributor) — including a max-contention round
+where all four type at the same position. Verified single-process and across
+two Redis-backed processes.
 
 ## Authoritative audit mode
 
@@ -133,6 +166,82 @@ broadcast, every acknowledged edit is on disk when the server dies. After a
 hard `kill -9` and restart, `on_load` replays the log (`AuditLog.replay`,
 tolerant of a torn final line from a crash mid-append) and the document is
 whole — no loss window, unlike a server that persists on a debounce.
+
+## Multi-process
+
+Real Rails runs multiple processes. With a multi-process cable adapter
+(`CABLE_ADAPTER=redis`) and a shared audit store, documents are shared across
+processes. Boot two servers and split clients across them:
+
+```bash
+# needs a running Redis
+redis-server &   # or `brew services start redis`
+
+AUDIT=1 CABLE_ADAPTER=redis bin/rails s -p 3777 -P tmp/pids/s3777.pid &
+AUDIT=1 CABLE_ADAPTER=redis bin/rails s -p 3778 -P tmp/pids/s3778.pid &
+
+cd frontend && PORTS=3777,3778 bun multiprocess.mjs
+```
+
+Clients are split across the two processes; the test asserts cross-process
+convergence (byte-for-byte), that *both* processes' server-side replicas stay
+current (server reads + a late joiner's handshake), cross-process presence,
+and a single shared audit log with every change recorded exactly once.
+
+How it works: liveness rides the Redis cable adapter; each process applies
+broadcasts that originated elsewhere to its own in-memory replica (idempotent
+CRDT merge), and the shared audit log is the source of truth for cold loads
+via `on_load`. Each process appends to the same `tmp/audit` log (atomic
+`O_APPEND`), so the audit history is global, and record-before-distribute
+holds across processes.
+
+## AnyCable
+
+AnyCable terminates WebSockets in a Go process and runs channel logic in a
+separate Ruby RPC server, so the in-memory-replica backend doesn't apply.
+`SYNC_BACKEND=store` switches the channel to the stateless, store-backed path
+(documents come from the audit log, not process memory).
+
+```bash
+# 1) AnyCable RPC server (channel logic in Ruby)
+AUDIT=1 SYNC_BACKEND=store CABLE_ADAPTER=any_cable bundle exec anycable
+
+# 2) anycable-go (WebSocket server, :8080) — brew install anycable-go
+anycable-go --host=127.0.0.1 --port=8080 --rpc_host=127.0.0.1:50051 \
+  --broadcast_adapter=redis --redis_url=redis://localhost:6379/15
+
+# 3) Rails HTTP (pages + /content), broadcasting via AnyCable
+AUDIT=1 SYNC_BACKEND=store CABLE_ADAPTER=any_cable bin/rails s -p 3777
+
+# Probe + concurrent storm (WS on anycable-go :8080, HTTP on Puma :3777):
+cd frontend
+WS_PORT=8080 HTTP_PORT=3777 bun anycable_probe.mjs
+WS_PORT=8080 HTTP_PORT=3777 CLIENTS=6 bun anycable_concurrent.mjs
+PORT=8080 bun provider_check.mjs   # the real @y-rb/actioncable provider
+```
+
+`anycable_probe.mjs` confirms liveness and that Puma's `/content` reflects the
+document even though a *different* process (the RPC server) handled the edits.
+`anycable_concurrent.mjs` runs a concurrent storm and asserts convergence + the
+shared store reflecting every edit. (`config/anycable.yml` holds the broadcast
+adapter / RPC host.)
+
+`anycable_guarantee.mjs` proves **record-before-distribute under AnyCable**: a
+change is invisible to other clients, to `/content`, to the audit store, AND to
+a fresh client's handshake until it has been authoritatively stored — under
+both a slow store and a failing store. (It uses the audit fault controls, which
+are file-based so they work across the Puma and RPC processes.)
+
+**Real browsers through AnyCable.** Set `CABLE_URL` so the page points the
+browser at anycable-go (`action_cable_meta_tag` emits it), then run the
+Playwright suites against the Puma page port — the WebSockets go to anycable-go:
+
+```bash
+AUDIT=1 SYNC_BACKEND=store CABLE_ADAPTER=any_cable \
+  CABLE_URL=ws://localhost:8080/cable bin/rails s -p 3777
+cd frontend && PORTS=3777 bun multi_browser.mjs   # all scenarios
+PORTS=3777 bun four_browsers.mjs                  # 4 browsers typing at once
+```
 
 ## Stress test
 

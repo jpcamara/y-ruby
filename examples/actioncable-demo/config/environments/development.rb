@@ -46,6 +46,10 @@ Rails.application.configure do
   # Uncomment if you wish to allow Action Cable access from any origin.
   config.action_cable.disable_request_forgery_protection = true
   config.action_cable.worker_pool_size = ENV.fetch("CABLE_WORKERS", 4).to_i
+  # Under AnyCable, point the browser at anycable-go (e.g.
+  # CABLE_URL=ws://localhost:8080/cable); action_cable_meta_tag emits it.
+  config.action_cable.url = ENV["CABLE_URL"] if ENV["CABLE_URL"].present?
+  config.action_cable.allowed_request_origins = [/.*/]
 
   # Raise error when a before_action's only/except options reference missing actions.
   config.action_controller.raise_on_missing_callback_actions = true

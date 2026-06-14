@@ -86,6 +86,121 @@ class SyncTest < Minitest::Test
     refute @helper.send(:sync_modifies_doc?, awareness_update)
   end
 
+  # -- Store-backed (AnyCable-native) backend ------------------------------
+
+  def store_backed_helper(loader:, recorder:, transmits:, broadcasts:)
+    klass = Class.new do
+      include YrbLite::Sync
+      sync_backend :store
+      attr_accessor :_t, :_b
+      def transmit(data) = @_t << data
+      define_method(:sync_distribute) { |encoded| @_b << encoded }
+    end
+    klass.on_load(&loader)
+    klass.on_change(&recorder)
+    helper = klass.new
+    helper._t = transmits
+    helper._b = broadcasts
+    helper
+  end
+
+  def test_sync_backend_defaults_to_memory_and_is_settable
+    klass = Class.new { include YrbLite::Sync }
+    assert_equal :memory, klass.sync_backend
+    klass.sync_backend :store
+    assert_equal :store, klass.sync_backend
+  end
+
+  def test_store_backed_answers_sync_step1_from_the_store
+    source = YrbLite::Doc.new
+    source.apply_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
+    state = source.encode_state_as_update
+
+    transmits = []
+    broadcasts = []
+    helper = store_backed_helper(loader: ->(_k) { state }, recorder: ->(_k, _u) {},
+                                 transmits: transmits, broadcasts: broadcasts)
+
+    # Client sends a SyncStep1 (empty state vector); server answers from store.
+    step1 = YrbLite::Doc.new.sync_step1
+    helper.sync_receive({ "update" => Base64.strict_encode64(step1) }, "doc-key")
+
+    assert_equal 1, transmits.length, "the SyncStep1 was answered"
+    response = Base64.strict_decode64(transmits[0]["update"])
+    delta = YrbLite::Awareness.new.update_from_message(response)
+    rebuilt = YrbLite::Doc.new
+    rebuilt.apply_update(delta)
+    assert_equal source.encode_state_vector, rebuilt.encode_state_vector,
+                 "the SyncStep2 carries the store's current state"
+    assert_empty broadcasts, "a handshake request is not broadcast"
+  end
+
+  def test_store_backed_records_then_relays_an_update
+    recorded = []
+    broadcasts = []
+    helper = store_backed_helper(loader: ->(_k) { nil }, recorder: ->(k, u) { recorded << [k, u] },
+                                 transmits: [], broadcasts: broadcasts)
+
+    msg = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
+    # The key is derived per-call (no instance var persists across AnyCable RPCs).
+    helper.sync_receive({ "update" => Base64.strict_encode64(msg) }, "doc-key")
+
+    assert_equal 1, recorded.length, "the change was recorded"
+    assert_equal "doc-key", recorded[0][0]
+    assert_equal YjsFixtures::TwoDocsMerged::DOC1_UPDATE, recorded[0][1], "the exact delta"
+    assert_equal 1, broadcasts.length, "the change was relayed"
+  end
+
+  def test_store_backed_skips_no_op_updates
+    recorded = []
+    broadcasts = []
+    helper = store_backed_helper(loader: ->(_k) { nil }, recorder: ->(_k, u) { recorded << u },
+                                 transmits: [], broadcasts: broadcasts)
+
+    empty = YrbLite::Awareness.new.encode_update(YjsFixtures::EmptyDoc::UPDATE)
+    helper.sync_receive({ "update" => Base64.strict_encode64(empty) }, "doc-key")
+
+    assert_empty recorded
+    assert_empty broadcasts
+  end
+
+  # -- Multi-process replica sync ------------------------------------------
+
+  def test_process_id_is_stable
+    assert_kind_of String, YrbLite::Sync.process_id
+    assert_equal YrbLite::Sync.process_id, YrbLite::Sync.process_id
+  end
+
+  def test_remote_change_is_applied_to_replica_without_recording
+    key = "replica-room"
+    recorded = []
+    helper = authoritative_helper(key, broadcasts: []) { |_k, update| recorded << update }
+    empty_sv = YrbLite::Awareness.new.encode_state_vector
+    msg = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
+
+    # A change that arrived from another process (different pid) is applied to
+    # the local replica but NOT re-recorded (its origin process recorded it).
+    helper.send(:sync_on_broadcast,
+                { "m" => Base64.strict_encode64(msg), "origin" => "other", "pid" => "process-b" })
+
+    refute_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
+                 "a remote process's change updates this process's replica"
+    assert_empty recorded, "a remote change is not re-recorded here"
+  end
+
+  def test_own_process_broadcast_is_not_reapplied
+    key = "own-pid-room"
+    helper = authoritative_helper(key, broadcasts: [])
+    sv_before = helper.sync_awareness.encode_state_vector # replica exists, empty
+    msg = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
+
+    helper.send(:sync_on_broadcast,
+                { "m" => Base64.strict_encode64(msg), "origin" => "x", "pid" => YrbLite::Sync.process_id })
+
+    assert_equal sv_before, YrbLite::Sync.registry[key].encode_state_vector,
+                 "a broadcast from this same process is not applied a second time"
+  end
+
   # -- Idle document eviction ----------------------------------------------
 
   def test_release_evicts_when_last_subscriber_leaves

@@ -17,15 +17,22 @@ class DocumentChannel < ApplicationCable::Channel
     on_change { |key, update| AuditLog.record(key, update) }
   end
 
+  # SYNC_BACKEND=store uses the stateless, store-backed path (works under
+  # AnyCable and across processes with no worker affinity). Requires the
+  # on_load/on_change store above.
+  sync_backend(ENV["SYNC_BACKEND"].to_sym) if ENV["SYNC_BACKEND"].present?
+
+  # Pass params[:id] on every action so the channel works under AnyCable too,
+  # where each RPC command gets a fresh channel instance (no ivars persist).
   def subscribed
     sync_for params[:id]
   end
 
   def receive(data)
-    sync_receive(data)
+    sync_receive(data, params[:id])
   end
 
   def unsubscribed
-    sync_unsubscribed
+    sync_unsubscribed(params[:id])
   end
 end

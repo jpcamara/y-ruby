@@ -84,6 +84,21 @@ module YrbLite
         @on_change = callable || block if callable || block
         @on_change
       end
+
+      # Select the document backend:
+      #   :memory (default) — keep a warm in-memory replica per process and
+      #     keep it current via a custom stream_from callback. Fast, but
+      #     assumes classic ActionCable (the callback runs in Ruby) and
+      #     process<->document affinity.
+      #   :store — stateless per message. No warm replica, no custom stream
+      #     callback. Handshakes/reads are served from the durable store
+      #     (`on_load`), changes are recorded (`on_change`) and relayed. Works
+      #     under AnyCable (broadcasts handled outside Ruby, no worker
+      #     affinity) and across processes. Requires `on_load` + `on_change`.
+      def sync_backend(mode = nil)
+        @sync_backend = mode if mode
+        @sync_backend || :memory
+      end
     end
 
     # Call from `subscribed`. Streams broadcasts for this document and
@@ -92,15 +107,22 @@ module YrbLite
       @sync_key = key.to_s
       @sync_origin = SecureRandom.hex(8)
       @sync_clients = [] # awareness client IDs seen on this connection
+
+      return sync_for_store_backed if self.class.sync_backend == :store
+
       Sync.subscribe(@sync_key)
       awareness = sync_awareness
 
       stream_from sync_stream_name, coder: ActiveSupport::JSON do |payload|
-        # Don't echo a client's own messages back to it.
-        transmit(payload) unless payload["origin"] == @sync_origin
+        sync_on_broadcast(payload)
       end
 
-      transmit({ "m" => Base64.strict_encode64(awareness.start) })
+      # Opening handshake: SyncStep1 then the current awareness, each as its
+      # own single-message frame, so providers that parse one message per frame
+      # (e.g. @y-rb/actioncable) handle both. The client replies SyncStep2 to
+      # the SyncStep1, delivering its state to the server.
+      sync_transmit(awareness.sync_step1)
+      sync_transmit(awareness.encode_awareness_update)
     end
 
     # Call from `receive`. Applies the client's message, replies directly
@@ -110,8 +132,15 @@ module YrbLite
     # If an `on_change` recorder is registered, document changes take the
     # strict authoritative path (record -> apply -> broadcast, serialized per
     # document); otherwise the fast path is used.
-    def sync_receive(data)
-      m = data.is_a?(Hash) ? data["m"] : nil
+    def sync_receive(data, key = nil)
+      # Pass `key` (params[:id]) when your transport doesn't keep the channel
+      # instance alive across actions — under AnyCable each RPC command gets a
+      # fresh channel, so instance variables set in `subscribed` are gone here.
+      @sync_key = key.to_s if key
+
+      # Accept both envelope keys: "m" (yrb-lite's own clients) and "update"
+      # (the @y-rb/actioncable browser provider).
+      m = data.is_a?(Hash) ? (data["m"] || data["update"]) : nil
       return unless m.is_a?(String)
 
       begin
@@ -119,6 +148,8 @@ module YrbLite
       rescue ArgumentError
         return # not valid base64 — ignore the frame, keep the connection
       end
+
+      return sync_receive_store_backed(m, bytes) if self.class.sync_backend == :store
 
       awareness = sync_awareness
       kind = awareness.message_kind(bytes)
@@ -154,7 +185,10 @@ module YrbLite
     # memory (only if an `on_load` is configured to bring it back — otherwise
     # the in-memory document is the only copy and is kept). Prevents a
     # long-running server from accumulating every document it has ever served.
-    def sync_unsubscribed
+    def sync_unsubscribed(key = nil)
+      @sync_key = key.to_s if key
+      return if self.class.sync_backend == :store # nothing cached per process
+
       sync_clear_presence
       saver = self.class.on_save
       Sync.release(@sync_key, evictable: !self.class.on_load.nil?) do |awareness|
@@ -176,7 +210,7 @@ module YrbLite
     # snapshot is taken after a document change.
     def sync_apply_fast(awareness, encoded, bytes)
       response = awareness.handle(bytes)
-      transmit({ "m" => Base64.strict_encode64(response) }) unless response.empty?
+      sync_transmit(response) unless response.empty?
 
       return unless sync_broadcast?(bytes)
 
@@ -211,11 +245,97 @@ module YrbLite
 
     # Single broadcast point for both paths (and presence removal), so the
     # relay semantics live in one place and tests can observe distribution.
+    # `origin` identifies the sending connection (don't echo to it); `pid`
+    # identifies the sending process (other processes apply it to their own
+    # replica — see sync_on_broadcast).
     def sync_distribute(encoded)
       ActionCable.server.broadcast(
         sync_stream_name,
-        { "m" => encoded, "origin" => @sync_origin }
+        sync_envelope(encoded, "origin" => @sync_origin, "pid" => Sync.process_id)
       )
+    end
+
+    # Transmit raw protocol bytes to this connection (base64, dual-key).
+    def sync_transmit(bytes)
+      transmit(sync_envelope(Base64.strict_encode64(bytes)))
+    end
+
+    # Build an outgoing envelope. We send the payload under BOTH keys: "m"
+    # (yrb-lite's own clients) and "update" (the @y-rb/actioncable provider),
+    # so either client works against the same server.
+    def sync_envelope(encoded, extra = {})
+      { "m" => encoded, "update" => encoded }.merge(extra)
+    end
+
+    # Handle a broadcast delivered by the cable adapter — which, with a
+    # multi-process adapter (Redis, solid_cable), may come from another server
+    # process. Keep this process's in-memory replica current with changes that
+    # originated elsewhere, then relay to this connection's browser.
+    def sync_on_broadcast(payload)
+      sync_apply_remote(payload["m"]) if payload["pid"] != Sync.process_id
+      transmit(payload) unless payload["origin"] == @sync_origin
+    end
+
+    # Apply a change that originated on another process to this process's
+    # replica, WITHOUT re-recording it (the origin process already recorded it
+    # before broadcasting). The CRDT merge is idempotent and commutative, so a
+    # cold replica converges regardless of ordering, and applying from several
+    # local connections is harmless.
+    def sync_apply_remote(encoded)
+      return unless encoded.is_a?(String)
+
+      begin
+        bytes = Base64.strict_decode64(encoded)
+      rescue ArgumentError
+        return
+      end
+
+      awareness = sync_awareness
+      case awareness.message_kind(bytes)
+      when MSG_KIND_UPDATE
+        update = awareness.update_from_message(bytes)
+        awareness.apply_update(update) if update
+      when MSG_KIND_AWARENESS
+        awareness.handle(bytes)
+      end
+    end
+
+    # -- Store-backed (AnyCable-native) path --------------------------------
+
+    # Subscribe WITHOUT a custom block (so AnyCable, which delivers broadcasts
+    # outside Ruby, relays them directly), and send the opening SyncStep1 built
+    # from the durable store. No warm replica is kept.
+    def sync_for_store_backed
+      stream_from sync_stream_name
+      sync_transmit(sync_load_doc.sync_step1)
+    end
+
+    # Stateless per message — no warm replica, no process<->document affinity
+    # assumptions. A client's SyncStep1 is answered from the store; document
+    # changes are recorded (durably, before relay) and broadcast; awareness is
+    # relayed best-effort. Echo to the sender is harmless (CRDT is idempotent).
+    def sync_receive_store_backed(encoded, bytes)
+      case Sync.codec.message_kind(bytes)
+      when MSG_KIND_SYNC_STEP1
+        result = sync_load_doc.handle_sync_message(bytes)
+        sync_transmit(result[2]) if result
+      when MSG_KIND_UPDATE
+        update = Sync.codec.update_from_message(bytes)
+        return unless update
+
+        self.class.on_change&.call(@sync_key, update) # record before relay
+        sync_distribute(encoded)
+      when MSG_KIND_AWARENESS
+        sync_distribute(encoded)
+      end
+    end
+
+    # Build a fresh document from the durable store (on_load).
+    def sync_load_doc
+      doc = YrbLite::Doc.new
+      state = self.class.on_load&.call(@sync_key)
+      doc.apply_update(state) if state
+      doc
     end
 
     # Record the awareness client IDs carried by an incoming message so we
@@ -261,6 +381,20 @@ module YrbLite
     @registry_mutex = Mutex.new
 
     class << self
+      # A stable id for this server process, stamped on every broadcast so
+      # other processes know to apply it to their replica and this process
+      # knows to skip its own. Survives for the life of the process.
+      def process_id
+        @process_id ||= SecureRandom.hex(8)
+      end
+
+      # A shared, stateless decoder for the store-backed path. message_kind and
+      # update_from_message only read their argument (they don't touch the
+      # instance's document), so one shared instance is safe across threads.
+      def codec
+        @codec ||= YrbLite::Awareness.new
+      end
+
       # Get or create the shared Awareness for a key. Creation (including
       # the on_load callback) is serialized under a mutex so concurrent
       # subscribers can never observe two documents for one key; all

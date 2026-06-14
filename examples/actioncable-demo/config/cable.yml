@@ -1,5 +1,9 @@
 development:
-  adapter: async
+  # async = single process (default). Set CABLE_ADAPTER=redis to run multiple
+  # server processes that share documents (e.g. the multi-process test).
+  adapter: <%= ENV.fetch("CABLE_ADAPTER", "async") %>
+  url: <%= ENV.fetch("REDIS_URL", "redis://localhost:6379/15") %>
+  channel_prefix: yrb_lite_demo_dev
 
 test:
   adapter: test

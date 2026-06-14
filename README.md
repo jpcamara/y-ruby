@@ -130,10 +130,89 @@ are dropped. So a malicious client can't crash the server (a Rust panic is
 caught at the FFI boundary and surfaced as a Ruby exception, never a process
 death) or relay garbage that disrupts the other clients in a room.
 
-Messages are the standard y-protocols binary messages, base64-encoded as
-`{ "m" => "<base64>" }`. A complete working example — Rails app, Tiptap
-editor, custom browser-side `ActionCableProvider`, and an automated
-end-to-end test — lives in
+#### Multi-process deployments
+
+A real Rails app runs multiple processes (Puma workers, multiple dynos), so
+documents have to be shared across them. They are:
+
+- **Liveness** rides the Action Cable adapter — use a multi-process adapter
+  (`redis` or `solid_cable`, not `async`) and a change on one process reaches
+  clients on every process.
+- **Each process keeps its own in-memory replica current.** A broadcast that
+  originated on another process is applied to the local replica (idempotent
+  CRDT merge — no re-recording, order-independent), so server-side reads and
+  new-client handshakes on any process are never stale. Broadcasts are stamped
+  with a per-process id (`Sync.process_id`) so a process skips its own.
+- **A shared durable store is the source of truth** for cold loads: when a
+  process spins up a replica it rebuilds current state via `on_load`. In
+  authoritative mode the store is always current (recorded before
+  distribution), so this is exact — and the record-before-distribute guarantee
+  holds across processes: each change is recorded by the process that receives
+  it, to the shared store, before anyone on any process sees it.
+
+The [demo](examples/actioncable-demo) includes a two-process test
+(`bun multiprocess.mjs`) that splits clients across two server processes and
+asserts cross-process convergence, replica freshness on both, cross-process
+presence, and a single shared audit log.
+
+This in-memory-replica approach (`sync_backend :memory`, the default) assumes
+classic ActionCable, where the channel instance lives for the connection and a
+custom `stream_from` callback runs in Ruby per broadcast.
+
+##### AnyCable (`sync_backend :store`)
+
+Under **AnyCable** that model doesn't hold: broadcasts are delivered by
+anycable-go (outside Ruby, so custom `stream_from` callbacks don't run), each
+RPC command gets a fresh channel instance (instance variables set in
+`subscribed` are gone by `receive`), and there's no worker↔document affinity.
+
+`sync_backend :store` is the AnyCable-native path — stateless per message, no
+warm replica:
+
+```ruby
+class DocumentChannel < ApplicationCable::Channel
+  include YrbLite::Sync
+  sync_backend :store
+
+  on_load  { |key| MyStore.load(key) }          # required: source of truth
+  on_change { |key, update| MyStore.append(key, update) }  # required: record
+
+  def subscribed   = sync_for(params[:id])
+  def receive(data) = sync_receive(data, params[:id])   # pass the key each call
+  def unsubscribed = sync_unsubscribed(params[:id])
+end
+```
+
+- `stream_from` is registered without a block; anycable-go relays broadcasts.
+- A client's SyncStep1 (handshake) is answered from the store; changes are
+  recorded (before relay) and broadcast. No document is held in Ruby memory
+  between calls — any worker can handle any message correctly.
+- Pass `params[:id]` to `sync_receive`/`sync_unsubscribed` so the key survives
+  AnyCable's per-command channel instances.
+- Echo isn't suppressed (no per-broadcast Ruby callback to filter on), but a
+  client receiving its own update is a harmless idempotent CRDT no-op.
+
+Verified end to end against `anycable-go` + the AnyCable RPC server: liveness,
+the `@y-rb/actioncable` provider, cross-process reads (the editing process and
+the HTTP process are different), and concurrent convergence. See the demo's
+`frontend/anycable_probe.mjs` and `anycable_concurrent.mjs`.
+
+Messages are the standard y-protocols binary messages, base64-encoded in the
+ActionCable envelope. The server is **wire-compatible with the standard
+[`@y-rb/actioncable`](https://www.npmjs.com/package/@y-rb/actioncable) browser
+provider** — it accepts that provider's `{ "update" => ... }` envelope as well
+as its own `{ "m" => ... }`, and sends one protocol message per frame — so you
+can use the off-the-shelf provider with no custom client code:
+
+```js
+import { createConsumer } from "@rails/actioncable"
+import { WebsocketProvider } from "@y-rb/actioncable"
+
+const provider = new WebsocketProvider(ydoc, createConsumer(), "DocumentChannel", { id: docId })
+```
+
+A complete working example — Rails app, Tiptap editor with collaborative
+cursors using that provider, and automated end-to-end tests — lives in
 [`examples/actioncable-demo`](examples/actioncable-demo).
 
 #### Authoritative audit mode (record before distribute)
