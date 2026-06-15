@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
+require_relative "lib/yrb_lite/version"
+
 Gem::Specification.new do |spec|
   spec.name = "yrb-lite"
-  spec.version = "0.1.0"
+  spec.version = YrbLite::VERSION
   spec.authors = ["JP Camara"]
   spec.email = ["johnpcamara@gmail.com"]
 
