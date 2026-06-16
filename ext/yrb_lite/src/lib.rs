@@ -171,6 +171,24 @@ fn awareness_client_ids_in(bytes: &[u8]) -> Result<Vec<u64>, String> {
     Ok(ids)
 }
 
+/// True if applying `update_bytes` to `doc` would integrate cleanly: every
+/// dependency the update references is already present (the doc's state vector
+/// covers the update's lower bound). A pure read; does not mutate the doc.
+/// When false, applying it would park a pending struct -- the signal that an
+/// earlier, causally-prior update is missing.
+fn update_is_ready(doc: &Doc, update_bytes: &[u8]) -> Result<bool, String> {
+    let update = yrs::Update::decode_v1(update_bytes).map_err(|e| e.to_string())?;
+    Ok(doc.transact().state_vector() >= update.state_vector_lower())
+}
+
+/// True if the doc holds pending structs or a pending delete set -- blocks that
+/// couldn't integrate because a dependency is missing. Used as a backstop after
+/// loading from storage: leftover pending means the stored log has a causal gap.
+fn doc_has_pending(doc: &Doc) -> bool {
+    let txn = doc.transact();
+    txn.store().pending_update().is_some() || txn.store().pending_ds().is_some()
+}
+
 // ============================================================================
 // Doc Implementation
 // ============================================================================
@@ -238,6 +256,22 @@ impl RbDoc {
             txn.apply_update(update).map_err(|e| e.to_string())
         })
         .map_err(runtime_error)
+    }
+
+    /// True if applying `update` would integrate cleanly (its dependencies are
+    /// all present). False means it would leave a pending struct -- an earlier
+    /// update is missing. Pure read; does not mutate.
+    fn update_ready(&self, update: RString) -> Result<bool, Error> {
+        let update_bytes = copy_bytes(update);
+        let doc = &self.0;
+        nogvl(move || update_is_ready(doc, &update_bytes)).map_err(runtime_error)
+    }
+
+    /// True if the document holds pending (un-integrable) structs waiting on a
+    /// missing dependency.
+    fn pending(&self) -> bool {
+        let doc = &self.0;
+        nogvl(move || doc_has_pending(doc))
     }
 
     /// Sync step 1: Create a sync message with our state vector
@@ -318,7 +352,6 @@ impl RbDoc {
         let msg = Message::Sync(SyncMessage::Update(update_bytes.to_vec()));
         binary_string(&msg.encode_v1())
     }
-
 }
 
 // ============================================================================
@@ -487,6 +520,22 @@ impl RbAwareness {
         .map_err(runtime_error)
     }
 
+    /// True if applying `update` would integrate cleanly (its dependencies are
+    /// all present). False means it depends on a missing, causally-prior update.
+    /// Pure read; does not mutate.
+    fn update_ready(&self, update: RString) -> Result<bool, Error> {
+        let update_bytes = copy_bytes(update);
+        let doc = self.0.doc();
+        nogvl(move || update_is_ready(doc, &update_bytes)).map_err(runtime_error)
+    }
+
+    /// True if the document holds pending (un-integrable) structs waiting on a
+    /// missing dependency.
+    fn pending(&self) -> bool {
+        let doc = self.0.doc();
+        nogvl(move || doc_has_pending(doc))
+    }
+
     /// Decode the awareness client IDs referenced by a protocol message
     /// (which may pack several sub-messages together). Sync sub-messages are
     /// ignored. The ActionCable layer uses this to learn which presence
@@ -577,6 +626,8 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
         method!(RbDoc::encode_state_as_update, -1),
     )?;
     doc_class.define_method("apply_update", method!(RbDoc::apply_update, 1))?;
+    doc_class.define_method("update_ready?", method!(RbDoc::update_ready, 1))?;
+    doc_class.define_method("pending?", method!(RbDoc::pending, 0))?;
     doc_class.define_method("sync_step1", method!(RbDoc::sync_step1, 0))?;
     doc_class.define_method("sync_step2", method!(RbDoc::sync_step2, 1))?;
     doc_class.define_method(
@@ -606,6 +657,8 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
         method!(RbAwareness::encode_state_as_update, -1),
     )?;
     awareness_class.define_method("apply_update", method!(RbAwareness::apply_update, 1))?;
+    awareness_class.define_method("update_ready?", method!(RbAwareness::update_ready, 1))?;
+    awareness_class.define_method("pending?", method!(RbAwareness::pending, 0))?;
     awareness_class.define_method("set_local_state", method!(RbAwareness::set_local_state, 1))?;
     awareness_class.define_method("local_state", method!(RbAwareness::local_state, 0))?;
     awareness_class.define_method(
@@ -748,5 +801,51 @@ mod tests {
         assert!(awareness_client_ids_in(&update_frame("x"))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn update_readiness_and_pending_detect_a_causal_gap() {
+        // Three sequential single-char inserts from one client: A, then B, then
+        // C. Each delta depends on the previous, so C can't integrate without B.
+        let src = Doc::new();
+        let txt = src.get_or_insert_text("t");
+        let mut deltas: Vec<Vec<u8>> = Vec::new();
+        let mut prev = yrs::StateVector::default();
+        for (i, ch) in ["A", "B", "C"].into_iter().enumerate() {
+            txt.insert(&mut src.transact_mut(), i as u32, ch);
+            deltas.push(src.transact().encode_state_as_update_v1(&prev));
+            prev = src.transact().state_vector();
+        }
+        let (u1, u2, u3) = (&deltas[0], &deltas[1], &deltas[2]);
+
+        // A doc holding only u1 (u2 was lost in transit / its record failed):
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(u1).unwrap())
+            .unwrap();
+        assert!(update_is_ready(&doc, u1).unwrap(), "u1 has no missing deps");
+        assert!(
+            !update_is_ready(&doc, u3).unwrap(),
+            "u3 depends on the missing u2"
+        );
+        assert!(
+            !doc_has_pending(&doc),
+            "nothing pending until u3 is applied"
+        );
+
+        // Applying u3 anyway parks it as a pending struct.
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(u3).unwrap())
+            .unwrap();
+        assert!(
+            doc_has_pending(&doc),
+            "u3 is pending: its parent u2 is missing"
+        );
+
+        // Once u2 arrives (via resync), u3 integrates and pending clears.
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(u2).unwrap())
+            .unwrap();
+        assert!(!doc_has_pending(&doc), "u2 arrived; u3 integrated");
     }
 }

@@ -40,4 +40,13 @@ module YjsFixtures
     STATE_VECTOR = YjsFixtures.b64("AA==")
     UPDATE = YjsFixtures.b64("AAA=")
   end
+
+  # Fixture 5: three causally-dependent updates from one client — insert "A",
+  # then "B", then "C". Each update references the previous item, so U3 cannot
+  # integrate unless U2 has been applied first (it parks as a pending struct).
+  module CausalChain
+    U1 = YjsFixtures.b64("AQGCno+7CAAEAQF0AUEA")
+    U2 = YjsFixtures.b64("AQGCno+7CAGEgp6PuwgAAUIA")
+    U3 = YjsFixtures.b64("AQGCno+7CAKEgp6PuwgBAUMA")
+  end
 end

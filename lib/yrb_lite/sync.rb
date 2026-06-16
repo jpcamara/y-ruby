@@ -208,6 +208,15 @@ module YrbLite
     # (SyncStep1, awareness-query) are answered above and not relayed. An
     # optional on_save snapshot is taken after a document change.
     def sync_apply_fast(awareness, encoded, bytes, kind)
+      # A document update that isn't causally ready (an earlier one was lost in
+      # transit) would relay an un-integrable change to peers and stall the
+      # replica. Drop it and ask the client to resync instead, which re-delivers
+      # the missing piece. See sync_apply_authoritative for the durable variant.
+      if kind == MSG_KIND_UPDATE
+        update = awareness.update_from_message(bytes)
+        return sync_request_resync(awareness) if update && !awareness.update_ready?(update)
+      end
+
       response = awareness.handle(bytes)
       sync_transmit(response) unless response.empty?
 
@@ -224,22 +233,42 @@ module YrbLite
     # before it has been recorded. If the recorder raises, the change is
     # rejected (not applied, not broadcast) and the exception propagates, so the
     # channel can surface it and the client can resync.
+    #
+    # Before recording, the update must be causally ready: every dependency it
+    # references must already be in the doc. If an earlier update was lost in
+    # transit, or its record failed, a later update arrives with a gap. Recording
+    # it would write a permanently-pending entry to the log -- one that can never
+    # be replayed until the missing update shows up. Such an update is rejected
+    # (not recorded, not applied, not relayed) and the client is asked to resync,
+    # which re-delivers the missing range as one causally-complete delta.
     def sync_apply_authoritative(awareness, encoded, bytes)
       recorder = self.class.on_change
 
-      modified = Sync.lock_for(@sync_key).synchronize do
+      outcome = Sync.lock_for(@sync_key).synchronize do
         update = awareness.update_from_message(bytes)
         # A no-op message (e.g. the empty SyncStep2 in a client's opening
         # handshake) carries no change, so there's nothing to record or relay.
-        next false unless update
+        next :noop unless update
+        next :gap unless awareness.update_ready?(update)
 
         recorder.call(@sync_key, update) # durable write; raise to reject
         awareness.apply_update(update)   # only recorded changes reach the doc
         sync_distribute(encoded)         # ...and only then the wire
-        true
+        :recorded
       end
 
-      sync_persist if modified
+      case outcome
+      when :recorded then sync_persist
+      when :gap      then sync_request_resync(awareness)
+      end
+    end
+
+    # Ask this connection's client to resync: re-send SyncStep1 carrying the
+    # server's current (gap-free) state vector. The client replies SyncStep2
+    # with everything the server is missing, delivered as one causally-complete
+    # delta -- which heals the gap that triggered the resync.
+    def sync_request_resync(awareness)
+      sync_transmit(awareness.sync_step1)
     end
 
     # Single broadcast point for both paths (and presence removal), so the
@@ -322,6 +351,15 @@ module YrbLite
       when MSG_KIND_UPDATE
         update = Sync.codec.update_from_message(bytes)
         return unless update
+
+        # Store mode keeps no warm replica, so to tell whether this update is
+        # causally ready we rebuild the doc from the store and check against it.
+        # That's an O(history) load per update (mitigated by snapshotting the
+        # store on the load path). A gappy update -- an earlier one was lost or
+        # its record failed -- is rejected and the client asked to resync,
+        # rather than written to the log as a permanently-pending entry.
+        doc = sync_load_doc
+        return sync_transmit(doc.sync_step1) unless doc.update_ready?(update)
 
         self.class.on_change&.call(@sync_key, update) # record before relay
         sync_distribute(encoded)

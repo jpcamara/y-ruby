@@ -313,6 +313,87 @@ class SyncTest < Minitest::Test
                  "a change that could not be recorded must not be distributed"
   end
 
+  # KNOWN GAP (currently failing): the authoritative path records the raw delta a
+  # client sends without checking that it can integrate. If an earlier update
+  # never reached the server (lost in a fire-and-forget send, or its record
+  # failed), a later causally-dependent update is recorded against a log that's
+  # missing its parent. Replaying that log can never integrate the later update
+  # -- it stays a permanently-pending struct -- so the "complete, replayable
+  # history" guarantee is broken. The fix: integrate, and if the update leaves
+  # the doc pending, reject it (don't record, don't broadcast), reload from the
+  # store, and force the client to resync so the missing piece comes back.
+  def test_authoritative_rejects_update_that_cannot_integrate
+    key = "causal-gap-room"
+    recorded = []
+    broadcasts = []
+    helper = authoritative_helper(key, broadcasts: broadcasts) { |_k, u| recorded << u }
+
+    # U1 ("A") integrates cleanly and is recorded.
+    helper.sync_receive(update_message(YjsFixtures::CausalChain::U1))
+    # U2 ("B") never arrives -- simulate it lost in transit. U3 ("C") depends on
+    # U2, so it cannot integrate against a log that holds only U1.
+    helper.sync_receive(update_message(YjsFixtures::CausalChain::U3))
+
+    assert_equal [YjsFixtures::CausalChain::U1], recorded,
+                 "U3 depends on a missing update and must not be recorded (causal gap)"
+    assert_equal 1, broadcasts.length,
+                 "U3 must not be distributed -- peers can't integrate it either"
+  end
+
+  def test_causal_gap_heals_after_the_client_resyncs
+    key = "causal-heal-room"
+    recorded = []
+    transmits = []
+    helper = authoritative_helper(key, broadcasts: []) { |_k, u| recorded << u }
+    helper.define_singleton_method(:transmit) { |data| transmits << data }
+
+    helper.sync_receive(update_message(YjsFixtures::CausalChain::U1)) # recorded
+    helper.sync_receive(update_message(YjsFixtures::CausalChain::U3)) # rejected (gap)
+
+    assert_equal 1, recorded.length, "the gappy update was not recorded"
+    refute_empty transmits, "a resync (SyncStep1) was requested from the client"
+
+    # The client resyncs: it re-sends everything the server is missing, as one
+    # causally-complete delta (U2 + U3 merged) computed from the server's SV.
+    client = YrbLite::Doc.new
+    [YjsFixtures::CausalChain::U1, YjsFixtures::CausalChain::U2,
+     YjsFixtures::CausalChain::U3].each { |u| client.apply_update(u) }
+    server = YrbLite::Sync.registry[key]
+    resync = client.encode_state_as_update(server.encode_state_vector)
+    helper.sync_receive(update_message(resync))
+
+    assert_equal 2, recorded.length, "the resync delta is recorded, gap-free"
+
+    replay = YrbLite::Doc.new
+    recorded.each { |u| replay.apply_update(u) }
+
+    refute_predicate replay, :pending?, "the recorded log replays without a causal gap"
+    assert_equal client.encode_state_as_update, replay.encode_state_as_update,
+                 "replaying the log reconstructs the full document"
+  end
+
+  def test_store_backed_rejects_update_that_cannot_integrate
+    log = []
+    broadcasts = []
+    loader = lambda do |_k|
+      next nil if log.empty?
+
+      doc = YrbLite::Doc.new
+      log.each { |u| doc.apply_update(u) }
+      doc.encode_state_as_update
+    end
+    helper = store_backed_helper(loader: loader, recorder: ->(_k, u) { log << u },
+                                 transmits: [], broadcasts: broadcasts)
+    msg = ->(bytes) { { "update" => Base64.strict_encode64(YrbLite::Awareness.new.encode_update(bytes)) } }
+
+    helper.sync_receive(msg.call(YjsFixtures::CausalChain::U1), "k") # ready -> recorded
+    helper.sync_receive(msg.call(YjsFixtures::CausalChain::U3), "k") # gap -> rejected
+
+    assert_equal [YjsFixtures::CausalChain::U1], log,
+                 "store mode must not append an update that can't integrate"
+    assert_equal 1, broadcasts.length, "the gappy update is not relayed"
+  end
+
   def test_on_change_ignores_non_document_messages
     key = "presence-room"
     recorded = []
