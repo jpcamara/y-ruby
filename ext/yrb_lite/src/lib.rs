@@ -4,7 +4,8 @@ use yrs::sync::protocol::MessageReader;
 use yrs::sync::{Awareness, DefaultProtocol, Message, Protocol, SyncMessage};
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::{Doc, ReadTxn, Transact};
+use std::sync::Mutex;
+use yrs::{ClientID, Doc, ReadTxn, Transact};
 
 /// Wrapper around yrs Doc.
 ///
@@ -18,20 +19,35 @@ struct RbDoc(Doc);
 
 /// Wrapper around yrs Awareness (which contains a Doc).
 ///
-/// Thread safety: `yrs::sync::Awareness` keeps client states in a `DashMap`
-/// and exposes everything through `&self`, so it's built for multi-threaded
-/// server use.
+/// Thread safety: as of yrs 0.27 `Awareness` dropped its internal locking and
+/// its mutating methods (`handle`, `set_local_state`, `clean_local_state`,
+/// `remove_state`, `update_with_clients`) take `&mut self`. It is `Send` but no
+/// longer `Sync`, so we serialize all access through a `Mutex`.
+///
+/// CRITICAL: the `Mutex` is ALWAYS locked inside the `nogvl` closure (never with
+/// the GVL held) and the guard is dropped before the closure returns. This obeys
+/// the same rule as the doc's RwLock (see `nogvl`): a thread never waits on this
+/// lock while holding the GVL, and never reacquires the GVL while holding this
+/// lock, so the GVL and this `Mutex` can't deadlock on lock order. Locking with
+/// the GVL held (outside `nogvl`) reintroduces that deadlock -- don't.
+///
+/// For doc-only reads we clone the (Arc-backed) `Doc` out under the brief lock
+/// and operate on the owned clone, so a long encode holds only the doc's own
+/// RwLock, not this `Mutex`, and never blocks presence updates on another
+/// thread. Lock order is always Mutex-then-doc-RwLock (or doc-RwLock alone),
+/// never the reverse.
 #[magnus::wrap(class = "YrbLite::Awareness", free_immediately, size)]
-struct RbAwareness(Awareness);
+struct RbAwareness(Mutex<Awareness>);
 
 /// Compile-time proof that the wrapped types are thread-safe. If a future
-/// yrs upgrade makes Doc or Awareness lose Send/Sync, this fails the build
-/// instead of silently shipping a thread-unsafe gem.
+/// yrs upgrade makes Doc lose Send/Sync, or Awareness lose Send, this fails the
+/// build instead of silently shipping a thread-unsafe gem. (Awareness is no
+/// longer `Sync` as of yrs 0.27, hence the `Mutex` wrapper, which restores it.)
 #[allow(dead_code)]
 fn assert_thread_safe() {
     fn is_send_sync<T: Send + Sync>() {}
     is_send_sync::<Doc>();
-    is_send_sync::<Awareness>();
+    is_send_sync::<Mutex<Awareness>>();
 }
 
 /// Run `f` with the GVL (Global VM Lock) released, so other Ruby threads,
@@ -42,10 +58,13 @@ fn assert_thread_safe() {
 ///   out of Ruby strings before entering, and results are converted to Ruby
 ///   objects after returning.
 /// - It must be `Send` (it runs while other threads own the GVL). `&Doc` and
-///   `&Awareness` are fine: both types are `Sync` (asserted above).
-/// - Any doc lock it takes must be acquired and released inside the closure, so
-///   we never reacquire the GVL while holding a yrs lock and can't deadlock on
-///   lock order.
+///   `&Mutex<Awareness>` are fine: both are `Sync` (asserted above).
+/// - LOCK DISCIPLINE: any native lock it takes -- the doc's internal RwLock OR
+///   the awareness `Mutex` (`self.0.lock()`) -- must be acquired AND released
+///   inside this closure (GVL already dropped). Never lock with the GVL held
+///   (e.g. before calling `nogvl`), or a thread waiting on the lock while
+///   holding the GVL can deadlock against the GVL reacquire. Same reason we
+///   never hold a lock across the GVL boundary.
 ///
 /// Panics inside the closure are caught and re-raised (resumed) after the GVL
 /// is reacquired, where magnus converts them to Ruby exceptions.
@@ -153,8 +172,17 @@ fn merged_doc_update(bytes: &[u8]) -> Result<Option<Vec<u8>>, String> {
         _ => yrs::merge_updates_v1(&updates).map_err(|e| e.to_string())?,
     };
     let update = yrs::Update::decode_v1(&merged).map_err(|e| e.to_string())?;
-    if update.state_vector().is_empty() && update.delete_set().is_empty() {
-        return Ok(None); // no-op (e.g. the empty SyncStep2 in an opening handshake)
+    // A genuine no-op (e.g. the empty SyncStep2 in an opening handshake) carries
+    // no structs, no deletes, and no dependencies. We must NOT treat a causally-
+    // pending update as a no-op: since yrs 0.26 such an update reports an empty
+    // state_vector (its structs can't integrate yet), but it still carries
+    // content and a non-empty lower bound (the deps it's waiting on). Dropping it
+    // here would silently swallow a gappy update instead of rejecting + resyncing.
+    if update.state_vector().is_empty()
+        && update.delete_set().is_empty()
+        && update.state_vector_lower().is_empty()
+    {
+        return Ok(None);
     }
     Ok(Some(merged))
 }
@@ -165,7 +193,7 @@ fn awareness_client_ids_in(bytes: &[u8]) -> Result<Vec<u64>, String> {
     let mut ids = Vec::new();
     for msg in MessageReader::new(&mut decoder) {
         if let Message::Awareness(update) = msg.map_err(|e| e.to_string())? {
-            ids.extend(update.clients.keys().copied());
+            ids.extend(update.clients.keys().map(|c| c.get()));
         }
     }
     Ok(ids)
@@ -207,7 +235,7 @@ impl RbDoc {
 
     /// Get the client ID
     fn client_id(&self) -> u64 {
-        self.0.client_id()
+        self.0.client_id().get()
     }
 
     /// Get the document GUID
@@ -367,17 +395,19 @@ impl RbAwareness {
             let client_id: u64 = TryConvert::try_convert(args[0])?;
             Awareness::new(Doc::with_client_id(client_id))
         };
-        Ok(RbAwareness(awareness))
+        Ok(RbAwareness(Mutex::new(awareness)))
     }
 
     /// Get the client ID of the underlying document
     fn client_id(&self) -> u64 {
-        self.0.doc().client_id()
+        let awareness = &self.0;
+        nogvl(move || awareness.lock().unwrap().doc().client_id().get())
     }
 
     /// Get the document GUID
     fn guid(&self) -> String {
-        self.0.doc().guid().to_string()
+        let awareness = &self.0;
+        nogvl(move || awareness.lock().unwrap().doc().guid().to_string())
     }
 
     /// A standalone SyncStep1 message (the server's state vector). Sent as its
@@ -386,7 +416,8 @@ impl RbAwareness {
     fn sync_step1(&self) -> RString {
         let awareness = &self.0;
         let encoded = nogvl(move || {
-            let txn = awareness.doc().transact();
+            let doc = awareness.lock().unwrap().doc().clone();
+            let txn = doc.transact();
             let sv = txn.state_vector();
             Message::Sync(SyncMessage::SyncStep1(sv)).encode_v1()
         });
@@ -398,10 +429,11 @@ impl RbAwareness {
     fn start(&self) -> Result<RString, Error> {
         let awareness = &self.0;
         let encoded = nogvl(move || -> Result<Vec<u8>, String> {
+            let awareness = awareness.lock().unwrap();
             let protocol = DefaultProtocol;
             let mut encoder = EncoderV1::new();
             protocol
-                .start(awareness, &mut encoder)
+                .start(&awareness, &mut encoder)
                 .map_err(|e| e.to_string())?;
             Ok(encoder.to_vec())
         })
@@ -416,9 +448,10 @@ impl RbAwareness {
         let awareness = &self.0;
 
         let encoded = nogvl(move || -> Result<Vec<u8>, String> {
+            let mut awareness = awareness.lock().unwrap();
             let protocol = DefaultProtocol;
             let responses = protocol
-                .handle(awareness, &data_bytes)
+                .handle(&mut awareness, &data_bytes)
                 .map_err(|e| e.to_string())?;
 
             if responses.is_empty() {
@@ -446,7 +479,8 @@ impl RbAwareness {
     fn encode_state_vector(&self) -> RString {
         let awareness = &self.0;
         let sv = nogvl(move || {
-            let txn = awareness.doc().transact();
+            let doc = awareness.lock().unwrap().doc().clone();
+            let txn = doc.transact();
             txn.state_vector().encode_v1()
         });
         binary_string(&sv)
@@ -466,7 +500,8 @@ impl RbAwareness {
                 None => yrs::StateVector::default(),
                 Some(bytes) => yrs::StateVector::decode_v1(bytes).map_err(|e| e.to_string())?,
             };
-            let txn = awareness.doc().transact();
+            let doc = awareness.lock().unwrap().doc().clone();
+            let txn = doc.transact();
             Ok(txn.encode_state_as_update_v1(&sv))
         })
         .map_err(runtime_error)?;
@@ -475,37 +510,47 @@ impl RbAwareness {
 
     /// Set local awareness state (JSON string)
     fn set_local_state(&self, json: String) -> Result<(), Error> {
-        let awareness = &self.0;
         let value: serde_json::Value =
             serde_json::from_str(&json).map_err(|e| runtime_error(e.to_string()))?;
-        awareness
-            .set_local_state(value)
-            .map_err(|e| runtime_error(e.to_string()))?;
-        Ok(())
+        let awareness = &self.0;
+        nogvl(move || -> Result<(), String> {
+            awareness
+                .lock()
+                .unwrap()
+                .set_local_state(value)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(runtime_error)
     }
 
     /// Get local awareness state as JSON string (or nil if not set)
     fn local_state(&self) -> Option<String> {
         let awareness = &self.0;
-        awareness
-            .local_state::<serde_json::Value>()
-            .map(|v| v.to_string())
+        nogvl(move || {
+            awareness
+                .lock()
+                .unwrap()
+                .local_state::<serde_json::Value>()
+                .map(|v| v.to_string())
+        })
     }
 
     /// Clear local awareness state
     fn clear_local_state(&self) {
         let awareness = &self.0;
-        awareness.clean_local_state();
+        nogvl(move || awareness.lock().unwrap().clean_local_state());
     }
 
     /// Get awareness update for broadcasting to peers
     fn encode_awareness_update(&self) -> Result<RString, Error> {
         let awareness = &self.0;
-        let update = awareness
-            .update()
-            .map_err(|e| runtime_error(e.to_string()))?;
-        let msg = Message::Awareness(update);
-        Ok(binary_string(&msg.encode_v1()))
+        let encoded = nogvl(move || -> Result<Vec<u8>, String> {
+            let awareness = awareness.lock().unwrap();
+            let update = awareness.update().map_err(|e| e.to_string())?;
+            Ok(Message::Awareness(update).encode_v1())
+        })
+        .map_err(runtime_error)?;
+        Ok(binary_string(&encoded))
     }
 
     /// Apply a raw update to the underlying document
@@ -514,7 +559,8 @@ impl RbAwareness {
         let awareness = &self.0;
         nogvl(move || -> Result<(), String> {
             let update = yrs::Update::decode_v1(&update_bytes).map_err(|e| e.to_string())?;
-            let mut txn = awareness.doc().transact_mut();
+            let doc = awareness.lock().unwrap().doc().clone();
+            let mut txn = doc.transact_mut();
             txn.apply_update(update).map_err(|e| e.to_string())
         })
         .map_err(runtime_error)
@@ -525,15 +571,22 @@ impl RbAwareness {
     /// Pure read; does not mutate.
     fn update_ready(&self, update: RString) -> Result<bool, Error> {
         let update_bytes = copy_bytes(update);
-        let doc = self.0.doc();
-        nogvl(move || update_is_ready(doc, &update_bytes)).map_err(runtime_error)
+        let awareness = &self.0;
+        nogvl(move || {
+            let doc = awareness.lock().unwrap().doc().clone();
+            update_is_ready(&doc, &update_bytes)
+        })
+        .map_err(runtime_error)
     }
 
     /// True if the document holds pending (un-integrable) structs waiting on a
     /// missing dependency.
     fn pending(&self) -> bool {
-        let doc = self.0.doc();
-        nogvl(move || doc_has_pending(doc))
+        let awareness = &self.0;
+        nogvl(move || {
+            let doc = awareness.lock().unwrap().doc().clone();
+            doc_has_pending(&doc)
+        })
     }
 
     /// Decode the awareness client IDs referenced by a protocol message
@@ -580,11 +633,13 @@ impl RbAwareness {
     fn remove_clients(&self, client_ids: Vec<u64>) -> Result<RString, Error> {
         let awareness = &self.0;
         let encoded = nogvl(move || -> Result<Vec<u8>, String> {
+            let mut awareness = awareness.lock().unwrap();
             let mut removed = Vec::new();
             for id in client_ids {
-                if awareness.meta(id).is_some() {
-                    awareness.remove_state(id);
-                    removed.push(id);
+                let cid = ClientID::new(id);
+                if awareness.meta(cid).is_some() {
+                    awareness.remove_state(cid);
+                    removed.push(cid);
                 }
             }
             if removed.is_empty() {
@@ -721,7 +776,7 @@ mod tests {
     }
 
     fn awareness_frame(client_id: u64) -> Vec<u8> {
-        let awareness = Awareness::new(Doc::with_client_id(client_id));
+        let mut awareness = Awareness::new(Doc::with_client_id(client_id));
         awareness
             .set_local_state(serde_json::json!({ "user": "alice" }))
             .unwrap();
