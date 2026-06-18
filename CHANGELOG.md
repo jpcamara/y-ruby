@@ -6,6 +6,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0.beta4] - 2026-06-18
+
+### Changed
+
+- `on_change` block recorders now run in the **channel instance's context**
+  (via `instance_exec`), so a recorder can call the channel's own methods --
+  `current_user`, `params`, request/connection-scoped accessors -- directly,
+  instead of plumbing them in through a thread-local. A non-Proc callable (an
+  object responding to `#call`) is still invoked with `#call` and its own
+  context. `on_load`/`on_save` are unchanged: they can run in the shared
+  document registry during a cold load or eviction, where no connection
+  instance exists, so they remain key-only. Existing block recorders that use
+  only the `(key, update)` arguments and lexically-scoped constants are
+  unaffected; the only behavioral change is `self` inside the block.
+
 ## [0.1.0.beta3] - 2026-06-18
 
 ### Changed
@@ -76,7 +91,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Precompiled native gems for common platforms (no Rust toolchain needed to
   install) via the cross-gem workflow.
 
-[Unreleased]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta3...main
+[Unreleased]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta4...main
+[0.1.0.beta4]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta3...v0.1.0.beta4
 [0.1.0.beta3]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta2...v0.1.0.beta3
 [0.1.0.beta2]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta1...v0.1.0.beta2
 [0.1.0.beta1]: https://github.com/jpcamara/yrb-lite/releases/tag/v0.1.0.beta1
