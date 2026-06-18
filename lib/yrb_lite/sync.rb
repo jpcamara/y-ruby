@@ -20,6 +20,10 @@ module YrbLite
   #     on_load { |key| Document.find_by(key: key)&.content }
   #     on_save { |key, update| Document.find_by(key: key)&.update!(content: update) }
   #
+  #     # on_change blocks run in the channel instance's context, so instance
+  #     # methods (current_user, params, ...) are available without plumbing:
+  #     on_change { |key, update| Document.record!(key, update, by: current_user) }
+  #
   #     def subscribed
   #       sync_for params[:id]
   #     end
@@ -72,6 +76,13 @@ module YrbLite
       # document so the recorded order is the apply order. If the block raises,
       # the change is rejected: neither applied to the shared document nor
       # broadcast to other subscribers.
+      #
+      # A block recorder runs in the *channel instance's* context, so it can
+      # call the channel's own methods (current_user, params, a per-connection
+      # Current.* accessor) directly, with no thread-local plumbing. (A non-Proc
+      # callable is invoked with #call instead, since it carries its own
+      # context.) on_change always fires from within sync_receive, unlike
+      # on_load/on_save, which can run context-free in the shared registry.
       #
       # Registering an on_change switches that channel onto the strict path
       # (record, apply, broadcast). Without it, the default fast path applies
@@ -282,9 +293,9 @@ module YrbLite
         next :noop unless update
         next :gap unless awareness.update_ready?(update)
 
-        recorder.call(@sync_key, update) # durable write; raise to reject
-        awareness.apply_update(update)   # only recorded changes reach the doc
-        sync_distribute(encoded)         # ...and only then the wire
+        sync_record_change(recorder, update) # durable write; raise to reject
+        awareness.apply_update(update) # only recorded changes reach the doc
+        sync_distribute(encoded) # ...and only then the wire
         :recorded
       end
 
@@ -422,7 +433,9 @@ module YrbLite
           return :gap
         end
 
-        self.class.on_change&.call(@sync_key, update) # record before relay
+        if (recorder = self.class.on_change)
+          sync_record_change(recorder, update) # record before relay
+        end
         sync_distribute(encoded)
         :recorded
       when MSG_KIND_AWARENESS
@@ -458,6 +471,14 @@ module YrbLite
       return unless (saver = self.class.on_save)
 
       saver.call(@sync_key, sync_awareness.encode_state_as_update)
+    end
+
+    # Invoke the on_change recorder. A block/proc runs in this channel instance's
+    # context (instance_exec) so it can reach the channel's own methods; a
+    # non-Proc callable is invoked with #call, since it carries its own context.
+    def sync_record_change(recorder, update)
+      args = [@sync_key, update]
+      recorder.is_a?(Proc) ? instance_exec(*args, &recorder) : recorder.call(*args)
     end
 
     # -- Shared document registry ------------------------------------------

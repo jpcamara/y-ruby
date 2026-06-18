@@ -295,6 +295,64 @@ class SyncTest < Minitest::Test
     assert_equal 1, broadcasts.length, "change is distributed after recording"
   end
 
+  def test_on_change_block_runs_in_channel_instance_context
+    # A block recorder must run in the channel instance's context so it can call
+    # the channel's own methods (current_user, params, a per-connection
+    # Current.* accessor) directly -- no thread-local plumbing.
+    key = "ctx-room"
+    recorded_author = nil
+    klass = Class.new do
+      include YrbLite::Sync
+
+      attr_accessor :captured_broadcasts
+
+      def transmit(_data); end
+      define_method(:sync_distribute) { |encoded| @captured_broadcasts << encoded }
+      # the per-connection method a real channel exposes
+      def current_author = "user-42"
+    end
+    klass.on_change { |_k, _update| recorded_author = current_author }
+    helper = klass.new
+    helper.captured_broadcasts = []
+    helper.instance_variable_set(:@sync_key, key)
+    helper.instance_variable_set(:@sync_origin, "origin-#{key}")
+    helper.instance_variable_set(:@sync_clients, [])
+
+    helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE))
+
+    assert_equal "user-42", recorded_author,
+                 "on_change block runs in the channel instance context (instance_exec)"
+  end
+
+  def test_on_change_accepts_a_non_proc_callable
+    # A callable object (not a Proc) carries its own context, so it's invoked
+    # with #call -- (key, update) -- rather than instance_exec'd.
+    key = "callable-room"
+    seen = []
+    recorder = Object.new
+    recorder.define_singleton_method(:call) { |k, update| seen << [k, update.bytesize] }
+    klass = Class.new do
+      include YrbLite::Sync
+
+      attr_accessor :captured_broadcasts
+
+      def transmit(_data); end
+      define_method(:sync_distribute) { |encoded| @captured_broadcasts << encoded }
+    end
+    klass.on_change(recorder)
+    helper = klass.new
+    helper.captured_broadcasts = []
+    helper.instance_variable_set(:@sync_key, key)
+    helper.instance_variable_set(:@sync_origin, "origin-#{key}")
+    helper.instance_variable_set(:@sync_clients, [])
+
+    helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE))
+
+    assert_equal 1, seen.length, "callable recorder runs once per change"
+    assert_equal key, seen.first.first
+    assert_operator seen.first.last, :>, 0, "the update delta is passed through"
+  end
+
   def test_on_change_failure_rejects_change_entirely
     key = "reject-room"
     broadcasts = []
