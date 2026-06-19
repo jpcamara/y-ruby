@@ -26,6 +26,9 @@ mkmf.log
 *.gem
 /pkg/
 
+# Node
+node_modules/
+
 # IDE
 .idea/
 *.swp
