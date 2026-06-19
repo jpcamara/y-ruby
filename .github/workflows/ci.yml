@@ -55,6 +55,22 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx eslint .
 
+  reliable:
+    name: yrb-lite-reliable (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["20", "22"]
+    defaults:
+      run:
+        working-directory: packages/yrb-lite-reliable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test
+
   demo:
     name: Demo e2e (Ruby ${{ matrix.ruby }})
     runs-on: ubuntu-latest

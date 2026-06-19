@@ -25,27 +25,34 @@ task "actioncable:build" do
 end
 
 namespace :release do
-  desc "Print the two-gem release sequence (core via precompiled CI; actioncable pure Ruby)"
+  desc "Print the release sequence for all packages (2 gems + 1 npm package)"
   task :steps do
+    require "json"
     require_relative "lib/yrb_lite/version"
     require_relative "lib/yrb_lite/action_cable/version"
     core = YrbLite::VERSION
     cable = YrbLite::ActionCable::VERSION
+    npm = JSON.parse(File.read("packages/yrb-lite-reliable/package.json"))["version"]
     puts <<~STEPS
-      This repo ships TWO gems. Release them together when the shared core API changes.
-      JP runs the `gem push`/`git push` steps (RubyGems MFA + the default-branch guard).
+      This repo ships THREE publishable packages, versioned independently. Release the
+      two gems together when the shared core API changes. JP runs the push steps
+      (RubyGems MFA, npm auth, and the default-branch guard).
 
-      1) yrb-lite #{core}  — core, native extension; precompiled platform gems via CI
+      1) yrb-lite #{core}  — core gem, native extension; precompiled platform gems via CI
          a. bump lib/yrb_lite/version.rb + CHANGELOG.md, then commit
          b. git tag v#{core} && git push origin main "v#{core}"
          c. the "Precompiled gems" workflow builds 8 platform gems + the source gem
          d. gh run download <run-id> --dir tmp/ ; cp tmp/**/*.gem pkg/
          e. gem push pkg/yrb-lite-#{core}*.gem        # 9 gems: source + 8 platforms
 
-      2) yrb-lite-actioncable #{cable}  — pure Ruby; one gem, no precompilation
+      2) yrb-lite-actioncable #{cable}  — gem, pure Ruby; one gem, no precompilation
          a. bump lib/yrb_lite/action_cable/version.rb + CHANGELOG-actioncable.md, commit
          b. rake actioncable:build
          c. gem push pkg/yrb-lite-actioncable-#{cable}.gem
+
+      3) yrb-lite-reliable #{npm}  — npm package (client reliable-delivery core)
+         a. bump packages/yrb-lite-reliable/package.json version, commit
+         b. cd packages/yrb-lite-reliable && npm publish
 
       The actioncable gem depends on `yrb-lite >= 0.1.0.beta5` (a floor, so it tolerates
       newer core releases); only raise it when it needs a newer core API.

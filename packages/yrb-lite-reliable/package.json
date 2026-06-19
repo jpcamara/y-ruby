@@ -1,0 +1,40 @@
+{
+  "name": "yrb-lite-reliable",
+  "version": "0.1.0",
+  "description": "Transport-agnostic reliable-delivery core for the yrb-lite y-websocket protocol: ack-tracked queue, sync-since-last-ack merged updates, retransmit + reconnect replay. Compose it inside your own Yjs provider.",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "author": "JP Camara <jp@jpcamara.com>",
+  "homepage": "https://github.com/jpcamara/yrb-lite/tree/main/packages/yrb-lite-reliable#readme",
+  "bugs": {
+    "url": "https://github.com/jpcamara/yrb-lite/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jpcamara/yrb-lite.git",
+    "directory": "packages/yrb-lite-reliable"
+  },
+  "keywords": [
+    "yjs",
+    "crdt",
+    "yrb-lite",
+    "reliable-delivery",
+    "actioncable",
+    "y-websocket"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

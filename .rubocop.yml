@@ -49,6 +49,7 @@ Metrics/BlockLength:
   Exclude:
     - "test/**/*"
     - "*.gemspec"
+    - "Rakefile" # rake task blocks (e.g. release:steps) are legitimately long
 Metrics/ClassLength:
   Exclude:
     - "test/**/*"
