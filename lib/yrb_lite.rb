@@ -13,8 +13,8 @@ rescue LoadError
 end
 
 module YrbLite
-  # Error class is defined in Rust extension
-
-  # Autoload Sync module - only loaded when ActionCable is available
-  autoload :Sync, "yrb_lite/sync"
+  # Error class is defined in the Rust extension.
+  #
+  # The ActionCable integration (YrbLite::ActionCable::Sync) lives in the
+  # separate `yrb-lite-actioncable` gem; require "yrb_lite/action_cable".
 end

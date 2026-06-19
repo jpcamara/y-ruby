@@ -20,7 +20,7 @@ class DocumentsController < ApplicationController
       if ENV["AUDIT"].present?
         Store.current.replay(params[:id])
       else
-        YrbLite::Sync.registry[params[:id]]&.encode_state_as_update
+        YrbLite::ActionCable::Sync.registry[params[:id]]&.encode_state_as_update
       end
     return render json: { error: "No such document" }, status: :not_found unless update
 

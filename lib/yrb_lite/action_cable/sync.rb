@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
+require "yrb_lite"
 require "base64"
 require "securerandom"
 
-module YrbLite
+module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   # y-websocket protocol over ActionCable.
   #
   # Include this module in an ActionCable channel to sync Y.js documents
@@ -15,7 +16,7 @@ module YrbLite
   #
   # Example:
   #   class DocumentChannel < ApplicationCable::Channel
-  #     include YrbLite::Sync
+  #     include YrbLite::ActionCable::Sync
   #
   #     on_load { |key| Document.find_by(key: key)&.content }
   #     on_save { |key, update| Document.find_by(key: key)&.update!(content: update) }

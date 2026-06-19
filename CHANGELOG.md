@@ -6,6 +6,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0.beta5] - 2026-06-18
+
+### Changed
+
+- **Breaking:** the ActionCable integration has been extracted into a separate
+  gem, [`yrb-lite-actioncable`](https://rubygems.org/gems/yrb-lite-actioncable).
+  `yrb-lite` is now a standalone y-crdt wrapper: CRDT documents, awareness, and
+  the y-websocket sync protocol primitives, with no Rails/ActionCable coupling
+  (mirrors the `y-rb` / `yrb-actioncable` split). The `base64` runtime
+  dependency moved with it.
+
+### Migration
+
+- Using `YrbLite::Sync`? Add `gem "yrb-lite-actioncable"` and change
+  `include YrbLite::Sync` to `include YrbLite::ActionCable::Sync`. The concern's
+  API is otherwise unchanged. If you only use `YrbLite::Doc`/`YrbLite::Awareness`,
+  nothing changes.
+
 ## [0.1.0.beta4] - 2026-06-18
 
 ### Changed
@@ -91,7 +109,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Precompiled native gems for common platforms (no Rust toolchain needed to
   install) via the cross-gem workflow.
 
-[Unreleased]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta4...main
+[Unreleased]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta5...main
+[0.1.0.beta5]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta4...v0.1.0.beta5
 [0.1.0.beta4]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta3...v0.1.0.beta4
 [0.1.0.beta3]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta2...v0.1.0.beta3
 [0.1.0.beta2]: https://github.com/jpcamara/yrb-lite/compare/v0.1.0.beta1...v0.1.0.beta2

@@ -2,7 +2,8 @@
 
 source "https://rubygems.org"
 
-gemspec
+gemspec name: "yrb-lite"
+gemspec name: "yrb-lite-actioncable"
 
 gem "rake-compiler"
 gem "rb_sys"

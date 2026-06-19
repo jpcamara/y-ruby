@@ -30,6 +30,7 @@ group :development do
 end
 
 gem "yrb-lite", path: "../.."
+gem "yrb-lite-actioncable", path: "../.."
 
 # AnyCable (multi-process WebSocket server) — for the AnyCable harness/test
 gem "anycable-rails", "~> 1.6"

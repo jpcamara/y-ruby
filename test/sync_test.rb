@@ -2,28 +2,28 @@
 
 require "test_helper"
 require_relative "fixtures/yjs_fixtures"
-require "yrb_lite/sync"
+require "yrb_lite/action_cable"
 
 class SyncTest < Minitest::Test
   class SyncHelper
-    include YrbLite::Sync
+    include YrbLite::ActionCable::Sync
   end
 
   def setup
     @helper = SyncHelper.new
-    YrbLite::Sync.reset!
+    YrbLite::ActionCable::Sync.reset!
   end
 
   def test_awareness_for_returns_same_instance_for_same_key
-    a1 = YrbLite::Sync.awareness_for("test-room")
-    a2 = YrbLite::Sync.awareness_for("test-room")
+    a1 = YrbLite::ActionCable::Sync.awareness_for("test-room")
+    a2 = YrbLite::ActionCable::Sync.awareness_for("test-room")
 
     assert_same a1, a2
   end
 
   def test_awareness_for_different_keys
-    a1 = YrbLite::Sync.awareness_for("room-1")
-    a2 = YrbLite::Sync.awareness_for("room-2")
+    a1 = YrbLite::ActionCable::Sync.awareness_for("room-1")
+    a2 = YrbLite::ActionCable::Sync.awareness_for("room-2")
 
     refute_same a1, a2
   end
@@ -42,8 +42,8 @@ class SyncTest < Minitest::Test
       state
     end
 
-    awareness = YrbLite::Sync.awareness_for("loaded-room", loader)
-    YrbLite::Sync.awareness_for("loaded-room", loader)
+    awareness = YrbLite::ActionCable::Sync.awareness_for("loaded-room", loader)
+    YrbLite::ActionCable::Sync.awareness_for("loaded-room", loader)
 
     assert_equal 1, calls, "on_load should run once per key"
     target.apply_update(awareness.encode_state_as_update)
@@ -53,7 +53,7 @@ class SyncTest < Minitest::Test
 
   def test_awareness_for_is_thread_safe_on_creation
     instances = 16.times.map do
-      Thread.new { YrbLite::Sync.awareness_for("contended-room") }
+      Thread.new { YrbLite::ActionCable::Sync.awareness_for("contended-room") }
     end.map(&:value)
 
     assert_equal 1, instances.uniq(&:object_id).length,
@@ -61,20 +61,20 @@ class SyncTest < Minitest::Test
   end
 
   def test_reset_clears_registry
-    YrbLite::Sync.awareness_for("room-1")
+    YrbLite::ActionCable::Sync.awareness_for("room-1")
 
-    refute_empty YrbLite::Sync.registry
+    refute_empty YrbLite::ActionCable::Sync.registry
 
-    YrbLite::Sync.reset!
+    YrbLite::ActionCable::Sync.reset!
 
-    assert_empty YrbLite::Sync.registry
+    assert_empty YrbLite::ActionCable::Sync.registry
   end
 
   # -- Store-backed (AnyCable-native) backend ------------------------------
 
   def store_backed_helper(loader:, recorder:, transmits:, broadcasts:)
     klass = Class.new do
-      include YrbLite::Sync
+      include YrbLite::ActionCable::Sync
 
       sync_backend :store
       attr_accessor :_t, :_b
@@ -91,7 +91,7 @@ class SyncTest < Minitest::Test
   end
 
   def test_sync_backend_defaults_to_memory_and_is_settable
-    klass = Class.new { include YrbLite::Sync }
+    klass = Class.new { include YrbLite::ActionCable::Sync }
 
     assert_equal :memory, klass.sync_backend
     klass.sync_backend :store
@@ -156,8 +156,8 @@ class SyncTest < Minitest::Test
   # -- Multi-process replica sync ------------------------------------------
 
   def test_process_id_is_stable
-    assert_kind_of String, YrbLite::Sync.process_id
-    assert_equal YrbLite::Sync.process_id, YrbLite::Sync.process_id
+    assert_kind_of String, YrbLite::ActionCable::Sync.process_id
+    assert_equal YrbLite::ActionCable::Sync.process_id, YrbLite::ActionCable::Sync.process_id
   end
 
   def test_remote_change_is_applied_to_replica_without_recording
@@ -172,7 +172,7 @@ class SyncTest < Minitest::Test
     helper.send(:sync_on_broadcast,
                 { "m" => Base64.strict_encode64(msg), "origin" => "other", "pid" => "process-b" })
 
-    refute_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
+    refute_equal empty_sv, YrbLite::ActionCable::Sync.registry[key].encode_state_vector,
                  "a remote process's change updates this process's replica"
     assert_empty recorded, "a remote change is not re-recorded here"
   end
@@ -184,51 +184,51 @@ class SyncTest < Minitest::Test
     msg = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
 
     helper.send(:sync_on_broadcast,
-                { "m" => Base64.strict_encode64(msg), "origin" => "x", "pid" => YrbLite::Sync.process_id })
+                { "m" => Base64.strict_encode64(msg), "origin" => "x", "pid" => YrbLite::ActionCable::Sync.process_id })
 
-    assert_equal sv_before, YrbLite::Sync.registry[key].encode_state_vector,
+    assert_equal sv_before, YrbLite::ActionCable::Sync.registry[key].encode_state_vector,
                  "a broadcast from this same process is not applied a second time"
   end
 
   # -- Idle document eviction ----------------------------------------------
 
   def test_release_evicts_when_last_subscriber_leaves
-    YrbLite::Sync.awareness_for("evict-room")
-    YrbLite::Sync.subscribe("evict-room")
-    YrbLite::Sync.subscribe("evict-room") # two subscribers
+    YrbLite::ActionCable::Sync.awareness_for("evict-room")
+    YrbLite::ActionCable::Sync.subscribe("evict-room")
+    YrbLite::ActionCable::Sync.subscribe("evict-room") # two subscribers
 
     saved = []
 
-    refute YrbLite::Sync.release("evict-room", evictable: true) { |_a| saved << :save },
+    refute YrbLite::ActionCable::Sync.release("evict-room", evictable: true) { |_a| saved << :save },
            "one subscriber remains, so not evicted"
-    assert YrbLite::Sync.registry.key?("evict-room")
+    assert YrbLite::ActionCable::Sync.registry.key?("evict-room")
     assert_empty saved
 
-    assert YrbLite::Sync.release("evict-room", evictable: true) { |_a| saved << :save },
+    assert YrbLite::ActionCable::Sync.release("evict-room", evictable: true) { |_a| saved << :save },
            "last subscriber left, so evicted"
-    refute YrbLite::Sync.registry.key?("evict-room")
+    refute YrbLite::ActionCable::Sync.registry.key?("evict-room")
     assert_equal [:save], saved, "persisted exactly once before eviction"
   end
 
   def test_release_keeps_document_when_not_evictable
-    YrbLite::Sync.awareness_for("keep-room")
-    YrbLite::Sync.subscribe("keep-room")
+    YrbLite::ActionCable::Sync.awareness_for("keep-room")
+    YrbLite::ActionCable::Sync.subscribe("keep-room")
 
-    refute YrbLite::Sync.release("keep-room", evictable: false)
-    assert YrbLite::Sync.registry.key?("keep-room"),
+    refute YrbLite::ActionCable::Sync.release("keep-room", evictable: false)
+    assert YrbLite::ActionCable::Sync.registry.key?("keep-room"),
            "with no on_load, unloading would lose data, so keep it warm"
   end
 
   def test_eviction_aborts_if_a_subscriber_returns_during_persist
-    YrbLite::Sync.awareness_for("race-room")
-    YrbLite::Sync.subscribe("race-room")
+    YrbLite::ActionCable::Sync.awareness_for("race-room")
+    YrbLite::ActionCable::Sync.subscribe("race-room")
 
-    evicted = YrbLite::Sync.release("race-room", evictable: true) do |_a|
-      YrbLite::Sync.subscribe("race-room") # someone reconnects mid-persist
+    evicted = YrbLite::ActionCable::Sync.release("race-room", evictable: true) do |_a|
+      YrbLite::ActionCable::Sync.subscribe("race-room") # someone reconnects mid-persist
     end
 
     refute evicted, "eviction must abort if a subscriber returned during persist"
-    assert YrbLite::Sync.registry.key?("race-room")
+    assert YrbLite::ActionCable::Sync.registry.key?("race-room")
   end
 
   # -- Authoritative (record-before-distribute) path -----------------------
@@ -245,7 +245,7 @@ class SyncTest < Minitest::Test
   # call so on_change never leaks between tests.
   def authoritative_helper(key, broadcasts:, &recorder)
     klass = Class.new do
-      include YrbLite::Sync
+      include YrbLite::ActionCable::Sync
 
       attr_accessor :captured_broadcasts
 
@@ -266,7 +266,7 @@ class SyncTest < Minitest::Test
     broadcasts = []
     events = []
     recorder = lambda do |k, update|
-      awareness = YrbLite::Sync.registry[k]
+      awareness = YrbLite::ActionCable::Sync.registry[k]
       events << {
         key: k,
         update: update.dup,
@@ -290,7 +290,7 @@ class SyncTest < Minitest::Test
     assert_equal 0, event[:broadcasts_at_record],
                  "nothing may be distributed before the change is recorded"
 
-    refute_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
+    refute_equal empty_sv, YrbLite::ActionCable::Sync.registry[key].encode_state_vector,
                  "change is applied after recording"
     assert_equal 1, broadcasts.length, "change is distributed after recording"
   end
@@ -302,7 +302,7 @@ class SyncTest < Minitest::Test
     key = "ctx-room"
     recorded_author = nil
     klass = Class.new do
-      include YrbLite::Sync
+      include YrbLite::ActionCable::Sync
 
       attr_accessor :captured_broadcasts
 
@@ -332,7 +332,7 @@ class SyncTest < Minitest::Test
     recorder = Object.new
     recorder.define_singleton_method(:call) { |k, update| seen << [k, update.bytesize] }
     klass = Class.new do
-      include YrbLite::Sync
+      include YrbLite::ActionCable::Sync
 
       attr_accessor :captured_broadcasts
 
@@ -365,7 +365,7 @@ class SyncTest < Minitest::Test
       helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE))
     end
 
-    assert_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
+    assert_equal empty_sv, YrbLite::ActionCable::Sync.registry[key].encode_state_vector,
                  "a change that could not be recorded must not be applied"
     assert_empty broadcasts,
                  "a change that could not be recorded must not be distributed"
@@ -416,7 +416,7 @@ class SyncTest < Minitest::Test
     client = YrbLite::Doc.new
     [YjsFixtures::CausalChain::U1, YjsFixtures::CausalChain::U2,
      YjsFixtures::CausalChain::U3].each { |u| client.apply_update(u) }
-    server = YrbLite::Sync.registry[key]
+    server = YrbLite::ActionCable::Sync.registry[key]
     resync = client.encode_state_as_update(server.encode_state_vector)
     helper.sync_receive(update_message(resync))
 
@@ -483,7 +483,7 @@ class SyncTest < Minitest::Test
 
     assert_empty recorded, "a no-op change must not be recorded"
     assert_empty broadcasts, "a no-op change must not be distributed"
-    assert_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector
+    assert_equal empty_sv, YrbLite::ActionCable::Sync.registry[key].encode_state_vector
   end
 
   def test_unrecorded_change_is_invisible_to_concurrent_readers
@@ -507,7 +507,7 @@ class SyncTest < Minitest::Test
     end
 
     entered.pop # recorder is now mid-write; the change is not yet recorded
-    server = YrbLite::Sync.registry[key]
+    server = YrbLite::ActionCable::Sync.registry[key]
 
     assert_equal empty_sv, server.encode_state_vector,
                  "a change still being recorded must be invisible to a resync/read"
@@ -534,13 +534,13 @@ class SyncTest < Minitest::Test
     assert_raises(RuntimeError) do
       helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE))
     end
-    assert_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
+    assert_equal empty_sv, YrbLite::ActionCable::Sync.registry[key].encode_state_vector,
                  "failed change is not applied"
 
     failing = false
     helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE))
 
-    refute_equal empty_sv, YrbLite::Sync.registry[key].encode_state_vector,
+    refute_equal empty_sv, YrbLite::ActionCable::Sync.registry[key].encode_state_vector,
                  "the re-offered change records and applies after recovery"
   end
 
@@ -583,7 +583,7 @@ class SyncTest < Minitest::Test
     # The authoritative document is exactly the in-order replay of the log.
     replay = YrbLite::Doc.new
     log.each { |update| replay.apply_update(update) }
-    server = YrbLite::Sync.registry[key]
+    server = YrbLite::ActionCable::Sync.registry[key]
 
     assert_equal server.encode_state_vector, replay.encode_state_vector
     assert_equal server.encode_state_as_update, replay.encode_state_as_update,
@@ -596,7 +596,7 @@ class SyncTest < Minitest::Test
   # distributions. Used to observe acks without touching ActionCable.
   def fast_helper(key, transmits:, broadcasts:)
     klass = Class.new do
-      include YrbLite::Sync
+      include YrbLite::ActionCable::Sync
 
       attr_accessor :_t, :_b
 

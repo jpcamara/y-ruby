@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 # Collaborative document channel. The whole y-websocket protocol is the three
-# lines of YrbLite::Sync below. Documents live in memory; add on_load/on_save
-# callbacks to persist them.
+# lines of YrbLite::ActionCable::Sync below. Documents live in memory; add
+# on_load/on_save callbacks to persist them.
 class DocumentChannel < ApplicationCable::Channel
-  include YrbLite::Sync
+  include YrbLite::ActionCable::Sync
 
   # Opt-in audit mode (AUDIT=1): record every change durably, in a single total
   # order, before it's applied or broadcast. Without it, the channel uses the

@@ -8,15 +8,17 @@ Gem::Specification.new do |spec|
   spec.authors = ["JP Camara"]
   spec.email = ["johnpcamara@gmail.com"]
 
-  spec.summary = "Thread-safe Ruby bindings for y-crdt (Y.js) with the y-websocket sync protocol for ActionCable"
-  spec.description = "yrb-lite is a thread-safe Ruby binding over the Rust y-crdt (yrs) library plus an " \
-                     "ActionCable concern implementing the full y-websocket sync protocol and awareness. It " \
-                     "lets a Rails app be the collaboration server for Y.js editors (Tiptap, ProseMirror, " \
-                     "BlockNote) with no Node sidecar."
+  spec.summary = "Thread-safe Ruby bindings for y-crdt (Y.js): documents, awareness, and the y-websocket sync protocol"
+  spec.description = "yrb-lite is a thread-safe Ruby binding over the Rust y-crdt (yrs) library: CRDT documents, " \
+                     "awareness/presence, and the y-websocket sync protocol primitives, with the GVL released " \
+                     "during native work so documents sync in parallel. The ActionCable/Rails integration lives " \
+                     "in the companion yrb-lite-actioncable gem."
   spec.homepage = "https://github.com/jpcamara/yrb-lite"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.4.0"
 
+  # The ActionCable layer (lib/yrb_lite/action_cable*) ships in the separate
+  # yrb-lite-actioncable gem, so it's excluded from the core gem here.
   spec.files = Dir[
     "lib/**/*.rb",
     "ext/**/*.{rb,rs,toml}",
@@ -24,7 +26,7 @@ Gem::Specification.new do |spec|
     "LICENSE",
     "README.md",
     "CHANGELOG.md"
-  ]
+  ] - Dir["lib/yrb-lite-actioncable.rb", "lib/yrb_lite/action_cable.rb", "lib/yrb_lite/action_cable/**/*"]
 
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/yrb_lite/extconf.rb"]
@@ -34,8 +36,6 @@ Gem::Specification.new do |spec|
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
 
-  # base64 stopped being a default gem in Ruby 3.4, so depend on it explicitly.
-  spec.add_dependency "base64", "~> 0.2"
   spec.add_dependency "rb_sys", "~> 0.9"
 
   spec.add_development_dependency "minitest", "~> 5.0"

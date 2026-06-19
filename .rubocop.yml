@@ -63,3 +63,4 @@ Gemspec/DevelopmentDependencies:
 Naming/FileName:
   Exclude:
     - "lib/yrb-lite.rb"
+    - "lib/yrb-lite-actioncable.rb"
