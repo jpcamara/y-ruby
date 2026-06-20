@@ -99,13 +99,13 @@ class SyncTest < Minitest::Test
     assert_equal :store, klass.sync_backend
   end
 
-  def test_sync_whisper_defaults_off_and_is_settable
+  def test_awareness_whisper_defaults_off_and_is_settable
     klass = Class.new { include YrbLite::ActionCable::Sync }
 
-    refute klass.sync_whisper
-    klass.sync_whisper true
+    refute klass.awareness_whisper
+    klass.awareness_whisper true
 
-    assert klass.sync_whisper
+    assert klass.awareness_whisper
   end
 
   # `whisper: true` is passed to stream_from only when whispering is opted in AND
@@ -119,7 +119,7 @@ class SyncTest < Minitest::Test
       define_method(:stream_from) { |_name, **opts, &_blk| captured << opts }
       define_method(:sync_stream_name) { "yrb_lite:doc" }
     end
-    klass.sync_whisper(whisper)
+    klass.awareness_whisper(whisper)
     instance = klass.new
     instance.define_singleton_method(:whispers_to) { |_b| nil } if anycable
     instance.send(:sync_stream, "yrb_lite:doc")

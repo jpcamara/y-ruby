@@ -10,7 +10,7 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `sync_whisper` channel option (default off). When enabled and running under
+- `awareness_whisper` channel option (default off). When enabled and running under
   AnyCable, the channel enables client-to-client whispering on its stream
   (`stream_from key, whisper: true`), so a client that opts into whisper delivery
   (the JS provider's `awarenessWhisper: true`) has its presence frames broadcast
