@@ -1,6 +1,6 @@
 {
   "name": "yrb-lite-reliable",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Client core for the yrb-lite y-websocket protocol: sync steps, message encode/decode, awareness, and reliable delivery (ack-tracked queue, sync-since-last-ack, retransmit + reconnect replay). Written in TypeScript with bundled types; usable from plain JS. Bring your own transport.",
   "type": "module",
   "main": "./dist/index.js",

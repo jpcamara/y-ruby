@@ -148,6 +148,28 @@ test("two engines converge end-to-end through a relay", () => {
   assert.ok(docA.getText("t").toString().includes("from B"));
 });
 
+test("awareness frames are flagged { awareness: true } on the send callback; doc frames are not", () => {
+  const doc = new Y.Doc();
+  const awA = new Awareness(doc);
+  const sends = []; // [{ type, awareness }]
+  const eng = new SyncEngine(doc, {
+    awareness: awA,
+    ...noTimers,
+    send: (frame, _id, opts) => sends.push({ type: frameType(frame), awareness: !!(opts && opts.awareness) }),
+  });
+  eng.onConnect();
+  doc.getText("t").insert(0, "hi"); // document update
+  awA.setLocalStateField("user", "alice"); // presence
+
+  const sync = sends.filter((s) => s.type === MSG.Sync);
+  const awareness = sends.filter((s) => s.type === MSG.Awareness);
+  assert.ok(sync.length >= 1 && sync.every((s) => s.awareness === false), "Sync frames are NOT flagged awareness");
+  assert.ok(awareness.length >= 1 && awareness.every((s) => s.awareness === true), "Awareness frames ARE flagged");
+
+  eng.destroy();
+  awA.destroy();
+});
+
 test("awareness: a local presence change is framed; an incoming one is applied", () => {
   const docA = new Y.Doc();
   const awA = new Awareness(docA);

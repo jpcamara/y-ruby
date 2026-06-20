@@ -29,12 +29,24 @@ import { ReliableSync, type TimerHandle } from "./reliable_sync.js";
 
 export const MessageType = { Sync: 0, Awareness: 1, Auth: 2, QueryAwareness: 3 } as const;
 
+/** Hints about an outgoing frame, so the transport can route it appropriately. */
+export interface SendOptions {
+  /**
+   * True for awareness/presence frames. These are ephemeral and fire-and-forget,
+   * so a transport that supports it (e.g. AnyCable `whisper`) can broadcast them
+   * client-to-client without a server round-trip. Transports without that just
+   * send normally.
+   */
+  awareness?: boolean;
+}
+
 export interface SyncEngineOptions {
   /**
-   * Transmit one raw protocol frame; `id` is set only for reliable document
-   * updates (tag it onto your envelope so the server can ack).
+   * Transmit one raw protocol frame. `id` is set only for reliable document
+   * updates (tag it onto your envelope so the server can ack). `opts.awareness`
+   * marks presence frames so the transport can whisper them where supported.
    */
-  send: (frame: Uint8Array, id: number | undefined) => void;
+  send: (frame: Uint8Array, id: number | undefined, opts?: SendOptions) => void;
   /** Optional awareness/presence. When omitted, awareness frames are ignored. */
   awareness?: Awareness | null;
   /** Use ack-tracked reliable delivery (default true). */
@@ -102,7 +114,7 @@ export class SyncEngine {
     if (this.awareness) {
       this._onAwarenessUpdate = ({ added, updated, removed }: AwarenessChange) => {
         const changed = added.concat(updated, removed);
-        this._send(this._frameAwareness(changed), undefined); // presence: fire-and-forget
+        this._send(this._frameAwareness(changed), undefined, { awareness: true }); // fire-and-forget
       };
       this.awareness.on("update", this._onAwarenessUpdate);
     }
@@ -122,7 +134,7 @@ export class SyncEngine {
   onConnect(): void {
     this._send(this._frameSyncStep1(), undefined);
     if (this.awareness && this.awareness.getLocalState() !== null) {
-      this._send(this._frameAwareness([this.doc.clientID]), undefined);
+      this._send(this._frameAwareness([this.doc.clientID]), undefined, { awareness: true });
     }
     if (this.reliable) this._delivery.onConnect();
   }

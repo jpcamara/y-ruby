@@ -5,12 +5,17 @@ y-websocket protocol — everything a Yjs provider needs *except the transport*.
 Bring your own socket (ActionCable, AnyCable, raw WebSocket); this owns the
 protocol.
 
-Two layers, use whichever you need:
+Three layers, use whichever you need:
 
-- **`SyncEngine`** — batteries-included. Binds to a `Y.Doc` (+ optional
+- **`ActionCableProvider`** — a ready-made Yjs provider for ActionCable /
+  AnyCable. Pass a `Y.Doc`, a cable consumer, and a channel; it wires the
+  subscription and you're collaborating. Awareness/presence is **whispered** over
+  AnyCable (client-to-client, no server round-trip) and falls back to a normal
+  send on plain ActionCable.
+- **`SyncEngine`** — the transport-agnostic core. Binds to a `Y.Doc` (+ optional
   `Awareness`) and owns the y-protocols **message encode/decode**, the
   **sync-step handshake** (SyncStep1 / SyncStep2 / Update), **awareness**, and
-  reliable delivery. Speaks raw `Uint8Array` frames; you only wire the socket.
+  reliable delivery. Speaks raw `Uint8Array` frames; you wire any socket.
 - **`ReliableSync`** — the zero-dependency reliable-delivery state machine on its
   own: ack-tracked queue, **sync-since-last-ack** (the unacked tail merged into
   one causally-complete delta), cumulative acks, retransmit + "server doesn't
@@ -23,13 +28,38 @@ Two layers, use whichever you need:
 npm install yrb-lite-reliable
 ```
 
-`SyncEngine` needs `yjs` and `y-protocols` (peers — your provider already has
-them). `ReliableSync` has **no dependencies**; import it on its own via
-`yrb-lite-reliable/reliable` if that's all you want.
+`ActionCableProvider` and `SyncEngine` need `yjs` and `y-protocols` (peers — your
+app already has them), plus an ActionCable/AnyCable consumer. `ReliableSync` has
+**no dependencies**; import it on its own via `yrb-lite-reliable/reliable` if
+that's all you want.
 
 Written in **TypeScript** and ships bundled type declarations, so TS projects get
 full types (typed options, methods, and errors) with no `@types` package — and
 plain-JS projects use the same compiled ESM with nothing extra to install.
+
+## ActionCableProvider (the easy path)
+
+```js
+import { ActionCableProvider } from "yrb-lite-reliable";
+import * as Y from "yjs";
+import { createConsumer } from "@anycable/web"; // or @rails/actioncable
+
+const doc = new Y.Doc();
+const consumer = createConsumer();
+const provider = new ActionCableProvider(doc, consumer, "DocumentChannel", { id: docId });
+
+provider.connect(); // does not auto-connect — wire your editor binding first
+// provider.awareness  -> the Awareness instance (a fresh one unless you pass opts.awareness)
+// provider.synced     -> caught up with the server
+// provider.hasPending -> unacked local edits in flight
+// provider.destroy()  -> tear down
+```
+
+On the server, include `YrbLite::ActionCable::Sync` in a channel named
+`DocumentChannel` (the [`yrb-lite-actioncable`](https://rubygems.org/gems/yrb-lite-actioncable)
+gem). Awareness/presence is whispered over AnyCable when available and sent
+normally on plain ActionCable. Need different transport or framing? Drop down to
+`SyncEngine` and supply your own `send`.
 
 ## SyncEngine
 
