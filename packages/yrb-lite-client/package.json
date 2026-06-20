@@ -1,7 +1,7 @@
 {
-  "name": "yrb-lite-reliable",
-  "version": "0.1.3",
-  "description": "Client core for the yrb-lite y-websocket protocol: sync steps, message encode/decode, awareness, and reliable delivery (ack-tracked queue, sync-since-last-ack, retransmit + reconnect replay). Written in TypeScript with bundled types; usable from plain JS. Bring your own transport.",
+  "name": "yrb-lite-client",
+  "version": "0.1.0",
+  "description": "JavaScript client for the yrb-lite y-websocket protocol: a ready-made ActionCable/AnyCable provider, a transport-agnostic sync engine (sync steps, encode/decode, awareness), and a reliable-delivery core (ack-tracked queue, sync-since-last-ack, retransmit + reconnect replay). Written in TypeScript with bundled types; usable from plain JS.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -32,14 +32,14 @@
   },
   "license": "MIT",
   "author": "JP Camara <jp@jpcamara.com>",
-  "homepage": "https://github.com/jpcamara/yrb-lite/tree/main/packages/yrb-lite-reliable#readme",
+  "homepage": "https://github.com/jpcamara/yrb-lite/tree/main/packages/yrb-lite-client#readme",
   "bugs": {
     "url": "https://github.com/jpcamara/yrb-lite/issues"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jpcamara/yrb-lite.git",
-    "directory": "packages/yrb-lite-reliable"
+    "directory": "packages/yrb-lite-client"
   },
   "keywords": [
     "yjs",

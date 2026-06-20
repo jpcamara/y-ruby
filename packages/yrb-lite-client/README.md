@@ -1,4 +1,4 @@
-# yrb-lite-reliable
+# yrb-lite-client
 
 The **client core** for the [`yrb-lite`](https://github.com/jpcamara/yrb-lite)
 y-websocket protocol — everything a Yjs provider needs *except the transport*.
@@ -27,12 +27,12 @@ Three layers, use whichever you need:
 ## Install
 
 ```bash
-npm install yrb-lite-reliable
+npm install yrb-lite-client
 ```
 
 `ActionCableProvider` and `SyncEngine` need `yjs` and `y-protocols` (peers — your
 app already has them), plus an ActionCable/AnyCable consumer. `ReliableSync` has
-**no dependencies**; import it on its own via `yrb-lite-reliable/reliable` if
+**no dependencies**; import it on its own via `yrb-lite-client/reliable` if
 that's all you want.
 
 Written in **TypeScript** and ships bundled type declarations, so TS projects get
@@ -42,7 +42,7 @@ plain-JS projects use the same compiled ESM with nothing extra to install.
 ## ActionCableProvider (the easy path)
 
 ```js
-import { ActionCableProvider } from "yrb-lite-reliable";
+import { ActionCableProvider } from "yrb-lite-client";
 import * as Y from "yjs";
 import { createConsumer } from "@anycable/web"; // or @rails/actioncable
 
@@ -66,7 +66,7 @@ different transport or framing? Drop down to `SyncEngine` and supply your own
 ## SyncEngine
 
 ```js
-import { SyncEngine, toBase64, fromBase64 } from "yrb-lite-reliable";
+import { SyncEngine, toBase64, fromBase64 } from "yrb-lite-client";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 
@@ -101,7 +101,7 @@ doc's / awareness's `update` events — you never call anything for outbound edi
 ## ReliableSync (standalone)
 
 ```js
-import { ReliableSync } from "yrb-lite-reliable/reliable"; // zero-dep
+import { ReliableSync } from "yrb-lite-client/reliable"; // zero-dep
 import * as Y from "yjs";
 
 const rs = new ReliableSync({

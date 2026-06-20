@@ -32,7 +32,7 @@ namespace :release do
     require_relative "lib/yrb_lite/action_cable/version"
     core = YrbLite::VERSION
     cable = YrbLite::ActionCable::VERSION
-    npm = JSON.parse(File.read("packages/yrb-lite-reliable/package.json"))["version"]
+    npm = JSON.parse(File.read("packages/yrb-lite-client/package.json"))["version"]
     puts <<~STEPS
       This repo ships THREE publishable packages, versioned independently. Release the
       two gems together when the shared core API changes. JP runs the push steps
@@ -50,9 +50,9 @@ namespace :release do
          b. rake actioncable:build
          c. gem push pkg/yrb-lite-actioncable-#{cable}.gem
 
-      3) yrb-lite-reliable #{npm}  — npm package (client reliable-delivery core)
-         a. bump packages/yrb-lite-reliable/package.json version, commit
-         b. cd packages/yrb-lite-reliable && npm publish
+      3) yrb-lite-client #{npm}  — npm package (client SDK: provider + sync engine + reliable delivery)
+         a. bump packages/yrb-lite-client/package.json version, commit
+         b. cd packages/yrb-lite-client && npm publish
 
       The actioncable gem depends on `yrb-lite >= 0.1.0.beta5` (a floor, so it tolerates
       newer core releases); only raise it when it needs a newer core API.
