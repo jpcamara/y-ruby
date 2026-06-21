@@ -34,7 +34,7 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   #     end
   #
   #     def unsubscribed
-  #       sync_clear_presence
+  #       sync_unsubscribed
   #     end
   #   end
   #
@@ -495,6 +495,8 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     # document update was durably recorded and relayed, :gap when it was
     # rejected for a resync, :noop for everything else.
     def sync_receive_store_backed(encoded, bytes)
+      sync_require_store_recorder!
+
       case Sync.codec.message_kind(bytes)
       when MSG_KIND_SYNC_STEP1
         result = sync_load_doc.handle_sync_message(bytes)

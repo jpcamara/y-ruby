@@ -753,6 +753,26 @@ class SyncTest < Minitest::Test
     assert_match(/on_load/, err.message)
   end
 
+  def test_store_backend_receive_requires_loader_too
+    recorded = []
+    klass = Class.new do
+      include YrbLite::ActionCable::Sync
+
+      sync_backend :store
+      on_change { |_key, update| recorded << update }
+      # deliberately no on_load
+    end
+    helper = klass.new
+    frame = YrbLite::Awareness.new.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
+
+    err = assert_raises(YrbLite::Error) do
+      helper.sync_receive({ "update" => Base64.strict_encode64(frame), "id" => 42 }, "doc-key")
+    end
+
+    assert_match(/on_load/, err.message)
+    assert_empty recorded, "store mode must not record when it cannot load the source of truth"
+  end
+
   def test_store_backend_with_both_callbacks_passes
     klass = Class.new do
       include YrbLite::ActionCable::Sync

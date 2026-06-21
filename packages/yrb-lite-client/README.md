@@ -137,6 +137,11 @@ rs.onConnect();      // (re)connected — replay the tail, resume retransmits
 rs.onDisconnect();   // dropped — keep the queue, pause
 ```
 
+While ack tracking is active, pending updates are retained and replayed until the
+server acknowledges them. If no ack ever arrives, `ReliableSync` assumes the
+server does not support the ack extension, sends the pending tail one final time,
+then downgrades to best-effort plain delivery.
+
 ## How it fits
 
 The server counterpart — ack *generation*, gap detection, record-before-distribute
