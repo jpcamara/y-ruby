@@ -216,6 +216,23 @@ test("destroy() tears down the Awareness it created, but not a caller-supplied o
   mine.destroy(); // cleanup the reaper interval
 });
 
+test("awareness: null disables it; undefined creates an owned one", (t) => {
+  const c = fakeConsumer({ withWhisper: true });
+  const disabled = new ActionCableProvider(new Y.Doc(), c, "DocumentChannel", { id: "a1" }, { awareness: null });
+  assert.equal(disabled.awareness, null, "null disables awareness");
+  disabled.connect();
+  c.deliverConnected();
+  disabled.disconnect(); // no presence removal possible
+  const anyAwareness = [...c.calls.send, ...c.calls.whisper].some(
+    (m) => frameTypeOf(m.update) === MessageType.Awareness
+  );
+  assert.equal(anyAwareness, false, "no awareness traffic at all when disabled");
+  disabled.destroy(); // must not throw on a null awareness
+
+  const owned = makeProvider(t, new Y.Doc(), fakeConsumer(), { id: "a2" });
+  assert.ok(owned.awareness instanceof Awareness, "undefined creates an owned Awareness");
+});
+
 test("a browser pagehide broadcasts a best-effort presence removal", (t) => {
   // Simulate a browser environment with a minimal window event target.
   const handlers = new Map();

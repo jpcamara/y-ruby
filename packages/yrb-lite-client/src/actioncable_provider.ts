@@ -60,7 +60,11 @@ export interface ActionCableProviderOptions
     YProtocolSessionOptions,
     "reliable" | "resendInterval" | "maxUnconfirmedResends" | "onFallback" | "onError"
   > {
-  /** Awareness/presence instance. Defaults to a fresh `new Awareness(doc)`. */
+  /**
+   * Awareness/presence instance. Omit (`undefined`) for a fresh
+   * `new Awareness(doc)` the provider owns; pass `null` to disable awareness
+   * entirely; pass your own to share one you manage.
+   */
   awareness?: Awareness | null;
 }
 
@@ -75,7 +79,7 @@ export class ActionCableProvider {
   readonly consumer: CableConsumer;
   readonly channelName: string;
   readonly channelParams: object;
-  readonly awareness: Awareness;
+  readonly awareness: Awareness | null;
   readonly session: YProtocolSession;
   private subscription: CableSubscription | null = null;
   private _onError: (error: unknown, context: string) => void;
@@ -96,8 +100,9 @@ export class ActionCableProvider {
     this.consumer = consumer;
     this.channelName = channelName;
     this.channelParams = channelParams;
-    this._ownsAwareness = opts.awareness == null;
-    this.awareness = opts.awareness ?? new Awareness(doc);
+    // undefined -> create one we own; null -> awareness disabled; value -> borrowed.
+    this._ownsAwareness = opts.awareness === undefined;
+    this.awareness = opts.awareness === undefined ? new Awareness(doc) : opts.awareness;
     this._onError = opts.onError ?? ((error, context) => console.warn(`[yrb-lite] ${context}:`, error));
 
     this.session = new YProtocolSession(doc, {
@@ -201,7 +206,7 @@ export class ActionCableProvider {
     this.session.destroy();
     // Only tear down the Awareness if we created it; a caller-supplied one is
     // theirs to own (and destroying it stops its reaper timer either way).
-    if (this._ownsAwareness) this.awareness.destroy();
+    if (this._ownsAwareness && this.awareness) this.awareness.destroy();
     this._statusListeners.clear();
   }
 
