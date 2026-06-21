@@ -160,6 +160,18 @@ export class YProtocolSession {
     }
   }
 
+  /**
+   * Broadcast that our local presence is gone (sets local state to null, which
+   * emits a removal awareness frame through `send`). Call this while the
+   * transport is still live so peers drop our cursor immediately instead of
+   * waiting for the awareness timeout. A no-op when there's no local state.
+   */
+  removeLocalAwareness(): void {
+    if (this.awareness && this.awareness.getLocalState() !== null) {
+      this.awareness.setLocalState(null); // fires "update" -> sends the removal frame
+    }
+  }
+
   /** A reliable-delivery `{ ack: id }` envelope arrived. */
   ack(id: number): void {
     this._delivery.onAck(id);
