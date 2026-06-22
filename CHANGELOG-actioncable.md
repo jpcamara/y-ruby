@@ -6,6 +6,8 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0.beta3] - 2026-06-22
+
 ### Changed
 
 - Document streams and awareness streams are separate under AnyCable. Document
@@ -17,6 +19,8 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the backend switch. `YrbLite::ActionCable::Sync` is always
   store-backed and fails closed unless both `on_load` and `on_change` are
   configured, so acknowledgements always mean the update is durably recorded.
+- Requires `yrb-lite >= 0.1.0.beta6` (uses the new `update_advances?` and
+  wire client-id frame validation).
 
 ## [0.1.0.beta2] - 2026-06-20
 

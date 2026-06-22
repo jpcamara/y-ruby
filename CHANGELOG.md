@@ -6,6 +6,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0.beta6] - 2026-06-22
+
+(yrb-lite core gem. The `yrb-lite-client` npm package ships these client changes as 0.1.2.)
+
 ### Added
 
 - `yrb-lite-client`, the TypeScript client package for the yrb-lite
