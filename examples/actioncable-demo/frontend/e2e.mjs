@@ -95,11 +95,15 @@ class TestClient {
 
   setPresence(state) {
     this.awareness.setLocalState(state)
+    this.sendPresenceFor([this.doc.clientID])
+  }
+
+  sendPresenceFor(clientIds) {
     const enc = encoding.createEncoder()
     encoding.writeVarUint(enc, MSG_AWARENESS)
     encoding.writeVarUint8Array(
       enc,
-      awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.doc.clientID])
+      awarenessProtocol.encodeAwarenessUpdate(this.awareness, clientIds)
     )
     this.send(enc)
   }
@@ -118,6 +122,8 @@ class TestClient {
   }
 
   close() {
+    this.awareness.setLocalState(null)
+    this.sendPresenceFor([this.doc.clientID])
     this.ws.close()
   }
 }
@@ -148,6 +154,9 @@ await bob.subscribed
 await waitFor("bob receives alice's edit via server", () =>
   bob.textContent().includes("Hello from Alice")
 )
+// Presence is ephemeral and not stored server-side. Alice emits it again after
+// Bob is subscribed so this checks live relay, not cached replay.
+alice.setPresence({ user: { name: "Alice", color: "#f00" } })
 await waitFor("bob sees alice's presence", () =>
   [...bob.awareness.getStates().values()].some((s) => s.user?.name === "Alice")
 )
@@ -174,10 +183,9 @@ if (!serverContent.includes("Hello from Alice") || !serverContent.includes("Hi f
 }
 console.log("ok: server-side CRDT state matches both edits")
 
-// Presence reaping: when a client disconnects, the server should clear its
-// awareness state and tell the others right away, rather than leaving a ghost
-// cursor until the client-side ~30s timeout. Bob takes presence too so we can
-// check that only Alice's state is removed.
+// Presence cleanup is client-driven in the store-backed path: the client sends
+// a removal frame before closing. Bob takes presence too so we can check that
+// only Alice's state is removed.
 bob.setPresence({ user: { name: "Bob", color: "#00f" } })
 await waitFor("alice sees bob's presence", () =>
   [...alice.awareness.getStates().values()].some((s) => s.user?.name === "Bob")
@@ -185,7 +193,7 @@ await waitFor("alice sees bob's presence", () =>
 
 alice.close()
 await waitFor(
-  "bob sees alice's presence reaped after disconnect (server-driven, <30s)",
+  "bob sees alice's presence removed after disconnect",
   () => ![...bob.awareness.getStates().values()].some((s) => s.user?.name === "Alice"),
   5000
 )

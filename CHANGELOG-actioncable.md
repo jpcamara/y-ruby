@@ -14,9 +14,9 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The channel accepts and emits the canonical document envelope,
   `{ "update" => "<base64 frame>" }`. Accepted document updates carrying an
   `"id"` are acknowledged with `{ "ack" => id }`.
-- `sync_backend :store` fails closed unless both `on_load` and `on_change` are
-  configured, so store-backed acknowledgements always mean the update is
-  durably recorded.
+- Removed the backend switch. `YrbLite::ActionCable::Sync` is always
+  store-backed and fails closed unless both `on_load` and `on_change` are
+  configured, so acknowledgements always mean the update is durably recorded.
 
 ## [0.1.0.beta2] - 2026-06-20
 
@@ -38,10 +38,9 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
   `YrbLite::Sync` through 0.1.0.beta4). Provides `YrbLite::ActionCable::Sync`, an
   ActionCable channel concern implementing the y-websocket sync protocol and
   awareness/presence over ActionCable and AnyCable: record-before-distribute
-  auditing (`on_change`), persistence hooks (`on_load`/`on_save`), `:memory` and
-  `:store` backends, presence reaping, idle-document eviction, and multi-process
-  replica sync. Depends on `yrb-lite` (>= 0.1.0.beta5) for the CRDT documents,
-  awareness, and protocol primitives.
+  auditing (`on_change`), persistence hooks, presence reaping, idle-document
+  eviction, and multi-process replica sync. Depends on `yrb-lite`
+  (>= 0.1.0.beta5) for the CRDT documents, awareness, and protocol primitives.
 - `on_change` recorders run in the channel instance's context (carried over from
   `yrb-lite` 0.1.0.beta4), so a recorder can call the channel's own methods
   directly.

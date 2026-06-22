@@ -2,8 +2,8 @@
 // distributing it, in a single total order, and that the audit log alone
 // reconstructs the document byte-for-byte.
 //
-//   1. Boot in audit mode:  AUDIT=1 bin/rails s -p 3777
-//   2. Run:                 cd frontend && bun audit.mjs
+//   1. Boot the server:  bin/rails s -p 3777
+//   2. Run:              cd frontend && bun audit.mjs
 //
 // One client makes a series of edits; we then fetch the server's audit log
 // (base64 CRDT deltas), replay it into a fresh Y.Doc with no help from the

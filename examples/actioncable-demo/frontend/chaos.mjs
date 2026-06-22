@@ -2,9 +2,9 @@
 // server (bad base64, random bytes, truncated/oversized protocol messages,
 // unknown types, spoofed awareness, broken envelopes) while good clients edit
 // normally. Checks that the server never dies, good clients still converge, a
-// second room is unaffected, and (in AUDIT mode) only valid changes are logged.
+// second room is unaffected, and only valid changes are logged.
 //
-//   AUDIT=1 bin/rails s -p 3777
+//   bin/rails s -p 3777
 //   cd frontend && bun chaos.mjs
 import * as Y from "yjs"
 import * as syncProtocol from "y-protocols/sync"

@@ -20,8 +20,6 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   #     include YrbLite::ActionCable::Sync
   #
   #     on_load { |key| Document.find_by(key: key)&.content }
-  #     on_save { |key, update| Document.find_by(key: key)&.update!(content: update) }
-  #
   #     # on_change blocks run in the channel instance's context, so instance
   #     # methods (current_user, params, ...) are available without plumbing:
   #     on_change { |key, update| Document.record!(key, update, by: current_user) }
@@ -39,10 +37,9 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   #     end
   #   end
   #
-  # The shared YrbLite::Awareness instances are safe to use from ActionCable's
-  # worker thread pool. Native CRDT work runs with the GVL released; document
-  # operations use yrs' internal lock, while awareness mutations are serialized
-  # by the Ruby wrapper's native mutex.
+  # The concern is store-backed and fail-closed: every document update is
+  # validated against `on_load`, recorded through `on_change`, then broadcast.
+  # No authoritative document state is kept in ActionCable process memory.
   module Sync
     # Validated frame kinds from Awareness#message_kind. A frame only gets a
     # non-DROP kind if it is exactly one well-formed message; anything
@@ -73,68 +70,21 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
         superclass.respond_to?(:on_load) ? superclass.on_load : nil
       end
 
-      # Persist a document *snapshot*. Called with (key, update) after every
-      # message that modified the document.
-      #
-      # NOTE: on_save is best-effort snapshotting, not authoritative durability.
-      # It runs outside the per-document apply lock, so against a last-write-wins
-      # store two overlapping saves can race and an older snapshot can land last.
-      # For durable, ordered, accepted-change guarantees use `on_change` (which
-      # records under the lock, before apply/broadcast); pair it with on_save only
-      # as a read-path optimization (a snapshot to load from instead of replaying
-      # the whole change log).
-      def on_save(callable = nil, &block)
-        @on_save = callable || block if callable || block
-        return @on_save if defined?(@on_save) && @on_save
-
-        superclass.respond_to?(:on_save) ? superclass.on_save : nil
-      end
-
       # Record every document change durably before it is applied or
-      # distributed (authoritative audit mode). Called synchronously with
-      # (key, update), where update is the exact CRDT delta, serialized per
-      # document so the recorded order is the apply order. If the block raises,
-      # the change is rejected: neither applied to the shared document nor
-      # broadcast to other subscribers.
+      # distributed. Called synchronously with (key, update), where update is
+      # the exact CRDT delta. If the block raises, the change is rejected:
+      # neither acknowledged nor broadcast to other subscribers.
       #
       # A block recorder runs in the *channel instance's* context, so it can
       # call the channel's own methods (current_user, params, a per-connection
       # Current.* accessor) directly, with no thread-local plumbing. (A non-Proc
       # callable is invoked with #call instead, since it carries its own
-      # context.) on_change always fires from within sync_receive, unlike
-      # on_load/on_save, which can run context-free in the shared registry.
-      #
-      # Registering an on_change switches that channel onto the strict path
-      # (record, apply, broadcast). Without it, the default fast path applies
-      # and broadcasts, with an optional on_save snapshot.
+      # context.) on_change always fires from within sync_receive.
       def on_change(callable = nil, &block)
         @on_change = callable || block if callable || block
         return @on_change if defined?(@on_change) && @on_change
 
         superclass.respond_to?(:on_change) ? superclass.on_change : nil
-      end
-
-      # Select the document backend:
-      #   :memory (default): keep a warm in-memory replica per process and keep
-      #     it current via a custom stream_from callback. Fast, but it assumes
-      #     classic ActionCable (the callback runs in Ruby) and
-      #     process<->document affinity.
-      #   :store: stateless per message, with no warm replica and no custom
-      #     stream callback. Handshakes and reads are served from the durable
-      #     store (`on_load`); changes are recorded (`on_change`) and relayed.
-      #     Works under AnyCable (broadcasts handled outside Ruby, no worker
-      #     affinity) and across processes. Requires `on_load` and `on_change`.
-      #
-      #     Presence in :store mode is server-relayed but not stored: the server
-      #     keeps no ephemeral awareness state and answers no awareness query, so
-      #     a late joiner sees other cursors as they next move rather than
-      #     immediately. Document data is fully consistent; only presence is
-      #     best-effort.
-      def sync_backend(mode = nil)
-        @sync_backend = mode if mode
-        return @sync_backend if defined?(@sync_backend) && @sync_backend
-
-        superclass.respond_to?(:sync_backend) ? superclass.sync_backend : :memory
       end
 
       # Maximum size, in decoded bytes, of an incoming document/awareness frame.
@@ -150,43 +100,25 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     end
 
     # Call from `subscribed`. Streams broadcasts for this document and
-    # transmits the server's opening handshake (SyncStep1 + awareness).
+    # transmits the server's opening handshake (SyncStep1 from the store).
     def sync_for(key)
       @sync_key = key.to_s
       @sync_origin = SecureRandom.hex(8)
-      @sync_clients = [] # awareness client IDs seen on this connection
+      sync_require_store_recorder!
 
-      return sync_for_store_backed if self.class.sync_backend == :store
-
-      Sync.subscribe(@sync_key)
-      awareness = sync_awareness
-
-      sync_stream sync_stream_name, coder: ActiveSupport::JSON do |payload|
-        sync_on_broadcast(payload)
-      end
+      sync_stream sync_stream_name
       sync_stream sync_awareness_stream_name, whisper: true if respond_to?(:whispers_to)
-
-      # Opening handshake: SyncStep1 then the current awareness, each as its
-      # own single-message frame, so providers that parse one message per frame
-      # handle both. The client replies SyncStep2 to the SyncStep1, delivering
-      # its state to the server.
-      sync_transmit(awareness.sync_step1)
-      sync_transmit(awareness.encode_awareness_update)
+      sync_transmit(sync_load_doc.sync_step1)
     end
 
     # Call from `receive`. Applies the client's message, replies directly
     # when the protocol calls for it, and relays document/awareness changes
     # to the other subscribers.
     #
-    # If an `on_change` recorder is registered, document changes take the
-    # strict authoritative path (record -> apply -> broadcast, serialized per
-    # document); otherwise the fast path is used.
-    #
     # Reliable delivery: document updates carry an "id", and the server replies
-    # `{ "ack" => id }` once the update has been accepted
-    # (recorded in audit mode, applied in fast mode). A causally-gapped update
-    # is not acked -- it gets a resync instead -- so the client retransmits
-    # until the update lands.
+    # `{ "ack" => id }` once the update has been durably recorded. A
+    # causally-gapped update is not acked -- it gets a resync instead -- so the
+    # client retransmits until the update lands.
     def sync_receive(data, key = nil)
       # Pass `key` (params[:id]) when your transport doesn't keep the channel
       # instance alive across actions. Under AnyCable each RPC command gets a
@@ -220,166 +152,31 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     # outcome symbol (:recorded/:applied/:gap/:noop) used by the reliable-
     # delivery ack. A dropped frame returns nil (never acked).
     def sync_dispatch(encoded, bytes)
-      return sync_receive_store_backed(encoded, bytes) if self.class.sync_backend == :store
-
-      awareness = sync_awareness
-      kind = awareness.message_kind(bytes)
-      # Malformed / truncated / multi-message / unknown frames are dropped
-      # before they can be processed or relayed to other clients.
-      return if kind == MSG_KIND_DROP
-
-      sync_track_clients(awareness, bytes) if kind == MSG_KIND_AWARENESS
-
-      if kind == MSG_KIND_UPDATE && self.class.on_change
-        sync_apply_authoritative(awareness, encoded, bytes)
-      else
-        sync_apply_fast(awareness, encoded, bytes, kind)
-      end
+      sync_receive_store_backed(encoded, bytes)
     end
 
-    # Call from `unsubscribed`. Clears the presence states this connection
-    # introduced and tells the other subscribers to drop those cursors, so a
-    # closed tab or dropped socket doesn't leave a ghost cursor behind until
-    # the client-side timeout reaps it.
-    def sync_clear_presence
-      return if @sync_clients.nil? || @sync_clients.empty?
-
-      removal = sync_awareness.remove_clients(@sync_clients)
-      @sync_clients = []
-      return if removal.empty?
-
-      sync_distribute(Base64.strict_encode64(removal))
-    end
-
-    # Call from `unsubscribed`. Clears this connection's presence and, when the
-    # last subscriber for the document leaves, persists and unloads it from
-    # memory (only when an `on_load` is configured to bring it back; otherwise
-    # the in-memory document is the only copy and is kept). Prevents a
-    # long-running server from accumulating every document it has ever served.
+    # Kept as the ActionCable lifecycle hook target. There is no cached document
+    # or server-owned presence state to clean up in the store-backed design.
     def sync_unsubscribed(key = nil)
       @sync_key = key.to_s if key
-      return if self.class.sync_backend == :store # nothing cached per process
-
-      sync_clear_presence
-      saver = self.class.on_save
-      Sync.release(@sync_key, evictable: !self.class.on_load.nil?) do |awareness|
-        saver&.call(@sync_key, awareness.encode_state_as_update)
-      end
-    end
-
-    # The shared Awareness (document + presence) for this channel's key.
-    # Also useful for server-side reads, e.g.:
-    #   sync_awareness.encode_state_as_update
-    def sync_awareness
-      Sync.awareness_for(@sync_key, self.class.on_load)
     end
 
     private
-
-    # Default path: apply the message, answer direct requests, relay
-    # state-changing messages to the other subscribers. Routing comes from the
-    # native `kind` (from Awareness#message_kind) rather than peeking at bytes.
-    # Document changes (SyncStep2, Update) and awareness get relayed; requests
-    # (SyncStep1, awareness-query) are answered above and not relayed. An
-    # optional on_save snapshot is taken after a document change.
-    #
-    # Returns an outcome symbol for the reliable-delivery ack: :applied when a
-    # document update was integrated and relayed, :gap when it was rejected for
-    # a resync, :noop for everything else (requests, awareness, empty updates).
-    def sync_apply_fast(awareness, encoded, bytes, kind)
-      # A document update that isn't causally ready (an earlier one was lost in
-      # transit) would relay an un-integrable change to peers and stall the
-      # replica. Drop it and ask the client to resync instead, which re-delivers
-      # the missing piece. See sync_apply_authoritative for the durable variant.
-      if kind == MSG_KIND_UPDATE
-        update = awareness.update_from_message(bytes)
-        # A no-op message (e.g. the empty SyncStep2 in an opening handshake)
-        # carries no change, so there's nothing to relay, persist, or ack.
-        return :noop unless update
-
-        unless awareness.update_ready?(update)
-          sync_request_resync(awareness)
-          return :gap
-        end
-      end
-
-      response = awareness.handle(bytes)
-      sync_transmit(response) unless response.empty?
-
-      return :noop unless [MSG_KIND_UPDATE, MSG_KIND_AWARENESS].include?(kind)
-
-      sync_distribute(encoded)
-      return :noop unless kind == MSG_KIND_UPDATE
-
-      sync_persist
-      :applied
-    end
-
-    # Authoritative path: record the change durably, then apply it to the
-    # shared document, then distribute it. The sequence runs under a
-    # per-document lock so changes are recorded in a single total order that
-    # matches the order they're applied, and nothing is distributed (or applied)
-    # before it has been recorded. If the recorder raises, the change is
-    # rejected (not applied, not broadcast) and the exception propagates, so the
-    # channel can surface it and the client can resync.
-    #
-    # Before recording, the update must be causally ready: every dependency it
-    # references must already be in the doc. If an earlier update was lost in
-    # transit, or its record failed, a later update arrives with a gap. Recording
-    # it would write a permanently-pending entry to the log -- one that can never
-    # be replayed until the missing update shows up. Such an update is rejected
-    # (not recorded, not applied, not relayed) and the client is asked to resync,
-    # which re-delivers the missing range as one causally-complete delta.
-    def sync_apply_authoritative(awareness, encoded, bytes)
-      recorder = self.class.on_change
-
-      outcome = Sync.lock_for(@sync_key).synchronize do
-        update = awareness.update_from_message(bytes)
-        # A no-op message (e.g. the empty SyncStep2 in a client's opening
-        # handshake) carries no change, so there's nothing to record or relay.
-        next :noop unless update
-        next :gap unless awareness.update_ready?(update)
-
-        # Exactly-once durable side effects. A lost-ack retry re-sends an update
-        # we already recorded and applied; it's causally ready but doesn't
-        # advance the doc. Ack it (so the client stops retransmitting) WITHOUT
-        # re-recording, re-applying, or re-broadcasting -- otherwise on_change
-        # (audit rows, counters, webhooks, billing) double-fires on every retry.
-        next :applied unless awareness.update_advances?(update)
-
-        sync_record_change(recorder, update) # durable write; raise to reject
-        awareness.apply_update(update) # only recorded changes reach the doc
-        sync_distribute(encoded) # ...and only then the wire
-        :recorded
-      end
-
-      case outcome
-      when :recorded then sync_persist
-      when :gap      then sync_request_resync(awareness)
-      end
-
-      # Surface the outcome for the reliable-delivery ack: :recorded means the
-      # update is durably written (and will be acked); :gap triggered a resync
-      # (no ack); :noop carried no change.
-      outcome
-    end
 
     # Ask this connection's client to resync: re-send SyncStep1 carrying the
     # server's current (gap-free) state vector. The client replies SyncStep2
     # with everything the server is missing, delivered as one causally-complete
     # delta -- which heals the gap that triggered the resync.
-    def sync_request_resync(awareness)
-      sync_transmit(awareness.sync_step1)
+    def sync_request_resync(doc)
+      sync_transmit(doc.sync_step1)
     end
 
     # Reliable delivery: acknowledge an accepted update back to the sending
     # connection. An ack-aware client tags each outgoing update with an "id"
     # and retains it until the matching `{ "ack" => id }` returns, retransmitting
-    # on a timer or reconnect; idempotent CRDT apply makes resends free. We ack
-    # only when the client supplied an id (so stock clients are unaffected) and
-    # the update was actually accepted -- recorded in audit mode, applied in fast
-    # mode. A gapped update gets no ack (it got a resync), so the client keeps
-    # retransmitting until the missing range lands and the update can integrate.
+    # on a timer or reconnect; idempotent CRDT apply makes resends free. Acks
+    # are sent only after the update has been durably recorded, or when a retry
+    # is already present in the durable store.
     def sync_send_ack(id, outcome)
       return if id.nil?
       return unless %i[recorded applied].include?(outcome)
@@ -389,11 +186,9 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       transmit({ "ack" => id })
     end
 
-    # Single broadcast point for both paths (and presence removal), so the
-    # relay semantics live in one place and tests can observe distribution.
-    # `origin` identifies the sending connection (don't echo to it); `pid`
-    # identifies the sending process (other processes apply it to their own
-    # replica; see sync_on_broadcast).
+    # Single broadcast point so relay semantics live in one place and tests can
+    # observe distribution. Store-backed streams intentionally echo to the
+    # sender; applying the same CRDT update twice is a no-op.
     def sync_distribute(encoded)
       ActionCable.server.broadcast(
         sync_stream_name,
@@ -411,56 +206,11 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       { "update" => encoded }.merge(extra)
     end
 
-    # Handle a broadcast delivered by the cable adapter. With a multi-process
-    # adapter (Redis, solid_cable), it may have come from another server
-    # process. Keep this process's in-memory replica current with changes that
-    # originated elsewhere, then relay to this connection's browser.
-    def sync_on_broadcast(payload)
-      sync_apply_remote(payload["update"]) if payload["pid"] != Sync.process_id
-      transmit(payload) unless payload["origin"] == @sync_origin
-    end
-
-    # Apply a change that originated on another process to this process's
-    # replica, without re-recording it (the origin process already recorded it
-    # before broadcasting). The CRDT merge is idempotent and commutative, so a
-    # cold replica converges regardless of ordering, and applying from several
-    # local connections is harmless.
-    def sync_apply_remote(encoded)
-      return unless encoded.is_a?(String)
-
-      begin
-        bytes = Base64.strict_decode64(encoded)
-      rescue ArgumentError
-        return
-      end
-
-      awareness = sync_awareness
-      case awareness.message_kind(bytes)
-      when MSG_KIND_UPDATE
-        update = awareness.update_from_message(bytes)
-        awareness.apply_update(update) if update
-      when MSG_KIND_AWARENESS
-        awareness.handle(bytes)
-      end
-    end
-
-    # -- Store-backed (AnyCable-native) path --------------------------------
-
-    # Subscribe without a custom block, so AnyCable (which delivers broadcasts
-    # outside Ruby) relays them directly. Send the opening SyncStep1 built from
-    # the durable store. No warm replica is kept.
-    def sync_for_store_backed
-      sync_require_store_recorder!
-      sync_stream sync_stream_name
-      sync_stream sync_awareness_stream_name, whisper: true if respond_to?(:whispers_to)
-      sync_transmit(sync_load_doc.sync_step1)
-    end
-
-    # Store mode acks updates as *durably recorded*, so it MUST have both a
+    # This concern acks updates as *durably recorded*, so it MUST have both a
     # loader (to rebuild the doc and detect causal gaps) and a recorder (to
-    # actually persist before acking). Fail closed at subscribe time rather than
-    # silently acking and broadcasting updates that were never stored -- which a
-    # cold load or reconnect would then lose.
+    # actually persist before acking). Fail closed rather than silently acking
+    # and broadcasting updates that were never stored -- which a cold load or
+    # reconnect would then lose.
     def sync_require_store_recorder!
       missing = []
       missing << :on_load unless self.class.on_load
@@ -468,14 +218,14 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       return if missing.empty?
 
       raise YrbLite::Error,
-            "sync_backend :store requires #{missing.join(" and ")}. Store mode acks " \
-            "updates as durably recorded; without a recorder an ack would claim a " \
-            "persistence that never happened, and a cold load would lose the edit."
+            "YrbLite::ActionCable::Sync requires #{missing.join(" and ")}. Updates are acked as " \
+            "durably recorded; without a loader and recorder, an ack would claim a persistence " \
+            "that never happened, and a cold load would lose the edit."
     end
 
     # Subscribe to a broadcast stream. The document stream is never whisper-
     # enabled; when AnyCable is present we separately subscribe an awareness
-    # stream with `whisper: true`, so the client-to-client fast path is scoped to
+    # stream with `whisper: true`, so the client-to-client path is scoped to
     # ephemeral presence instead of the durable document stream.
     def sync_stream(name, **, &)
       stream_from(name, **, &)
@@ -502,33 +252,24 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
         update = Sync.codec.update_from_message(bytes)
         return :noop unless update
 
-        # Store mode keeps no warm replica, so to tell whether this update is
-        # causally ready we rebuild the doc from the store and check against it.
-        # That's an O(history) load per update (mitigated by snapshotting the
-        # store on the load path). A gappy update -- an earlier one was lost or
-        # its record failed -- is rejected and the client asked to resync,
-        # rather than written to the log as a permanently-pending entry.
-        doc = sync_load_doc
-        unless doc.update_ready?(update)
-          sync_transmit(doc.sync_step1)
-          return :gap
+        Sync.lock_for(@sync_key).synchronize do
+          # To tell whether this update is causally ready we rebuild the doc
+          # from the store and check against it. That's an O(history) load per
+          # update, mitigated by snapshotting in the app's load path if needed.
+          doc = sync_load_doc
+          unless doc.update_ready?(update)
+            sync_request_resync(doc)
+            next :gap
+          end
+
+          # Lost-ack retry: the durable store already contains this update.
+          # Ack it without recording or relaying again.
+          next :applied unless doc.update_advances?(update)
+
+          sync_record_change(self.class.on_change, update) # record before relay
+          sync_distribute(encoded)
+          :recorded
         end
-
-        # Exactly-once: a lost-ack retry re-sends an update already in the store,
-        # so the freshly-loaded doc already contains it and it doesn't advance.
-        # Ack it without recording/relaying again (see update_advances? and the
-        # authoritative path).
-        return :applied unless doc.update_advances?(update)
-
-        # Defense in depth: sync_require_store_recorder! makes this unreachable
-        # without a recorder, but never broadcast/ack as :recorded if one is
-        # somehow absent -- that would acknowledge an unstored update.
-        recorder = self.class.on_change
-        return :noop unless recorder
-
-        sync_record_change(recorder, update) # record before relay
-        sync_distribute(encoded)
-        :recorded
       when MSG_KIND_AWARENESS
         sync_distribute(encoded)
         :noop
@@ -545,27 +286,12 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       doc
     end
 
-    # Record the awareness client IDs carried by an incoming message (already
-    # known to be an awareness frame) so we can clear them when this connection
-    # closes.
-    def sync_track_clients(awareness, bytes)
-      awareness.awareness_client_ids(bytes).each do |id|
-        @sync_clients << id unless @sync_clients.include?(id)
-      end
-    end
-
     def sync_stream_name
       "yrb_lite:#{@sync_key}"
     end
 
     def sync_awareness_stream_name
       "#{sync_stream_name}:awareness"
-    end
-
-    def sync_persist
-      return unless (saver = self.class.on_save)
-
-      saver.call(@sync_key, sync_awareness.encode_state_as_update)
     end
 
     # Invoke the on_change recorder. A block/proc runs in this channel instance's
@@ -576,11 +302,9 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       recorder.is_a?(Proc) ? instance_exec(*args, &recorder) : recorder.call(*args)
     end
 
-    # -- Shared document registry ------------------------------------------
+    # -- Shared process state ----------------------------------------------
 
-    @registry = {}
     @locks = {}
-    @subscribers = Hash.new(0)
     @registry_mutex = Mutex.new
 
     class << self
@@ -598,77 +322,19 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
         @codec ||= YrbLite::Awareness.new
       end
 
-      # Get or create the shared Awareness for a key. Creation (including
-      # the on_load callback) is serialized under a mutex so concurrent
-      # subscribers can never observe two documents for one key; all
-      # subsequent native operations run with the GVL released on the
-      # thread-safe Ruby wrapper.
-      def awareness_for(key, loader = nil)
-        @registry_mutex.synchronize do
-          @registry[key] ||= begin
-            awareness = YrbLite::Awareness.new
-            if loader && (state = loader.call(key))
-              awareness.apply_update(state)
-            end
-            awareness
-          end
-        end
-      end
-
-      # Per-document mutex serializing the authoritative record -> apply ->
-      # broadcast section, so a document's audit log is a single total order.
+      # Per-document mutex serializing load -> record -> broadcast within this
+      # process. The durable store remains the cross-process source of truth.
       # Only briefly holds the registry mutex to fetch/create the lock; the
       # durable write itself runs while holding only this per-key lock.
       def lock_for(key)
         @registry_mutex.synchronize { @locks[key] ||= Mutex.new }
       end
 
-      # Count a new subscriber for a document.
-      def subscribe(key)
-        @registry_mutex.synchronize { @subscribers[key] += 1 }
-      end
-
-      # Drop a subscriber. When the last one leaves and the document is
-      # evictable (there's an on_load to bring it back, so unloading can't lose
-      # data), persist it via the given block and unload it from memory, so a
-      # long-running server doesn't accumulate every document and lock it has
-      # ever seen. Returns true if the document was evicted.
-      #
-      # The persist runs outside the registry lock (it may do I/O), and we
-      # re-check the subscriber count afterward: if someone reconnected while
-      # we were saving, eviction is aborted and the warm document is kept.
-      def release(key, evictable:)
-        awareness = @registry_mutex.synchronize do
-          @subscribers[key] -= 1 if @subscribers[key].positive?
-          next nil unless @subscribers[key].zero?
-
-          @subscribers.delete(key)
-          evictable ? @registry[key] : nil
-        end
-        return false unless awareness
-
-        yield awareness if block_given?
-
-        @registry_mutex.synchronize do
-          # A subscriber may have returned during the persist above.
-          next false unless @subscribers[key].zero?
-
-          @subscribers.delete(key)
-          @locks.delete(key)
-          !@registry.delete(key).nil?
-        end
-      end
-
-      def registry
-        @registry_mutex.synchronize { @registry.dup }
-      end
-
-      # Clear all documents (useful for testing).
+      # Clear process-local locks and codec (useful for testing).
       def reset!
         @registry_mutex.synchronize do
-          @registry = {}
           @locks = {}
-          @subscribers = Hash.new(0)
+          @codec = nil
         end
       end
     end

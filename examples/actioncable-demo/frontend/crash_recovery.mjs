@@ -5,7 +5,7 @@
 //   <SIGKILL the server, restart it>
 //   PHASE=verify ROOM=... bun crash_recovery.mjs   # check nothing was lost
 //
-// Audit mode fsyncs every change before it's applied or broadcast, so every
+// The file store fsyncs every change before it is broadcast, so every
 // acknowledged edit is on disk when the server dies. On restart, on_load
 // replays the log and the document comes back whole, without the loss window a
 // debounced-persistence server would have.

@@ -5,8 +5,7 @@
 // suffers random full-blackhole outages, and a fraction of inbound acks are
 // dropped too. The reliable layer must still deliver every acknowledged edit.
 //
-//   bin/rails s -p 3777          (memory mode)
-//   AUDIT=1 bin/rails s -p 3777  (authoritative store)
+//   bin/rails s -p 3777
 //   cd frontend && bun reliable_stress.mjs
 //
 // Tunables (env): CLIENTS, EDITS (per client), LOSS (outbound drop rate),
@@ -22,8 +21,9 @@
 // Loss is applied only after the initial handshake completes, and only to the
 // directions the reliable layer covers: outbound document batches (recovered by
 // retransmit) and inbound acks (a dropped ack just means another retransmit).
-// Inbound broadcasts are left intact -- recovering those is the server-resync
-// concern, not this layer's.
+// Inbound broadcasts are left intact. After all reliable client->server queues
+// drain, fresh clean clients join to prove the durable store can resync the
+// complete acknowledged document.
 import * as Y from "yjs"
 import { ActionCableProvider } from "yrb-lite-client"
 import { serverText } from "./server_read.mjs"
@@ -101,6 +101,8 @@ function lossyConsumer(url) {
         return sub
       },
       remove(sub) {
+        const i = subs.indexOf(sub)
+        if (i >= 0) subs.splice(i, 1)
         sub.unsubscribe()
       },
     },
@@ -191,33 +193,42 @@ check("all pending queues drained", clients.every((c) => !c.provider.hasPending)
 const expected = new Set()
 for (let i = 0; i < CLIENTS; i++) for (let n = 0; n < EDITS; n++) expected.add(`c${i}-${n}`)
 
-await waitFor("every client sees all edits", () =>
-  clients.every((c) => markersIn(c.doc).size === TOTAL)
-)
-
-// --- Assertions -------------------------------------------------------------
-let everyClientComplete = true
-for (const [i, c] of clients.entries()) {
-  const have = markersIn(c.doc)
-  const missing = [...expected].filter((m) => !have.has(m))
-  if (missing.length) {
-    everyClientComplete = false
-    console.log(`  client ${i} missing ${missing.length}: ${missing.slice(0, 5).join(",")}...`)
-  }
-}
-check(`every client has all ${TOTAL} edits (nothing acknowledged was lost)`, everyClientComplete)
-
-const ref = Y.encodeStateAsUpdate(clients[0].doc)
-const converged = clients.every((c) => {
-  const u = Y.encodeStateAsUpdate(c.doc)
-  return u.length === ref.length && u.every((b, k) => b === ref[k])
-})
-check("all client docs converged byte-for-byte", converged)
-
 const server = await serverText(BASE, ROOM)
 const serverMissing = [...expected].filter((m) => !server.includes(m))
 check(`server holds all ${TOTAL} edits`, serverMissing.length === 0)
 if (serverMissing.length) console.log(`  server missing ${serverMissing.length}`)
+
+const verifiers = Array.from({ length: Math.min(3, CLIENTS) }, () => {
+  const doc = new Y.Doc()
+  const consumer = lossyConsumer(URL)
+  const provider = new ActionCableProvider(doc, consumer, "DocumentChannel", { id: ROOM }, opts)
+  provider.connect()
+  return { doc, consumer, provider }
+})
+await waitFor("fresh clients sync from the durable store", () => verifiers.every((c) => c.provider.synced))
+
+await waitFor("every verifier sees all edits", () =>
+  verifiers.every((c) => markersIn(c.doc).size === TOTAL)
+)
+
+// --- Assertions -------------------------------------------------------------
+let everyVerifierComplete = true
+for (const [i, c] of verifiers.entries()) {
+  const have = markersIn(c.doc)
+  const missing = [...expected].filter((m) => !have.has(m))
+  if (missing.length) {
+    everyVerifierComplete = false
+    console.log(`  verifier ${i} missing ${missing.length}: ${missing.slice(0, 5).join(",")}...`)
+  }
+}
+check(`fresh clients have all ${TOTAL} edits (nothing acknowledged was lost)`, everyVerifierComplete)
+
+const ref = Y.encodeStateAsUpdate(verifiers[0].doc)
+const converged = verifiers.every((c) => {
+  const u = Y.encodeStateAsUpdate(c.doc)
+  return u.length === ref.length && u.every((b, k) => b === ref[k])
+})
+check("fresh client docs converged byte-for-byte", converged)
 
 const totalDroppedOut = clients.reduce((s, c) => s + c.consumer.state.droppedOut, 0)
 const totalDroppedAck = clients.reduce((s, c) => s + c.consumer.state.droppedAck, 0)
@@ -226,11 +237,11 @@ check("loss was actually exercised (outbound frames dropped)", totalDroppedOut >
 check("ack loss was actually exercised", totalDroppedAck > 0)
 console.log(`\nstats: sent=${totalSent} droppedOut=${totalDroppedOut} droppedAck=${totalDroppedAck}`)
 
-for (const c of clients) c.provider.destroy()
+for (const c of clients.concat(verifiers)) c.provider.destroy()
 console.log("")
 if (failures > 0) {
   console.log(`FAILED: ${failures} check(s) failed`)
   process.exit(1)
 }
-console.log(`PASS: room ${ROOM} — ${TOTAL} edits survived heavy loss with zero lost`)
+console.log(`PASS: room ${ROOM} — ${TOTAL} edits reached the durable store and fresh clients resynced`)
 process.exit(0)

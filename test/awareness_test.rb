@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require_relative "fixtures/yjs_fixtures"
 
 class AwarenessTest < Minitest::Test
   def test_awareness_creation
@@ -103,7 +104,7 @@ class AwarenessTest < Minitest::Test
 
   def test_encode_update
     awareness = YrbLite::Awareness.new
-    update_data = "\x01\x02\x03"
+    update_data = YjsFixtures::TwoDocsMerged::DOC1_UPDATE
     encoded = awareness.encode_update(update_data)
 
     assert_kind_of String, encoded
@@ -151,7 +152,7 @@ class AwarenessTest < Minitest::Test
 
   def test_awareness_client_ids_ignores_sync_messages
     awareness = YrbLite::Awareness.new
-    sync_msg = awareness.encode_update("\x01\x02\x03")
+    sync_msg = awareness.encode_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)
 
     assert_empty awareness.awareness_client_ids(sync_msg)
   end

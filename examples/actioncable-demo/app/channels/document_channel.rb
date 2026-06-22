@@ -1,26 +1,13 @@
 # frozen_string_literal: true
 
 # Collaborative document channel. The whole y-websocket protocol is the three
-# lines of YrbLite::ActionCable::Sync below. Documents live in memory; add
-# on_load/on_save callbacks to persist them.
+# lines of YrbLite::ActionCable::Sync below. Documents are loaded from and
+# recorded to Store.current; ActionCable process memory is not authoritative.
 class DocumentChannel < ApplicationCable::Channel
   include YrbLite::ActionCable::Sync
 
-  # Opt-in audit mode (AUDIT=1): record every change durably, in a single total
-  # order, before it's applied or broadcast. Without it, the channel uses the
-  # default fast path.
-  #
-  # on_load rebuilds a document from its audit log, so it survives an eviction
-  # or a server crash. The fsync'd log is where the state actually lives.
-  if ENV["AUDIT"].present?
-    on_load  { |key| Store.current.replay(key) }
-    on_change { |key, update| Store.current.record(key, update) }
-  end
-
-  # SYNC_BACKEND=store uses the stateless, store-backed path (works under
-  # AnyCable and across processes with no worker affinity). Requires the
-  # on_load/on_change store above.
-  sync_backend(ENV["SYNC_BACKEND"].to_sym) if ENV["SYNC_BACKEND"].present?
+  on_load  { |key| Store.current.replay(key) }
+  on_change { |key, update| Store.current.record(key, update) }
 
   # Pass params[:id] on every action so the channel works under AnyCable too,
   # where each RPC command gets a fresh channel instance (no ivars persist).

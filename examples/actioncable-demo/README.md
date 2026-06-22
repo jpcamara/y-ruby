@@ -8,8 +8,8 @@ natively in Ruby through [yrb-lite](../..).
 Browser (Tiptap + Yjs + yrb-lite-client) ⇄ ActionCable ⇄ DocumentChannel (YrbLite::ActionCable::Sync)
 ```
 
-The server can read the document too. `GET /docs/:id/content` returns the live
-CRDT state (base64), pulled straight from the server's own Y.Doc with no
+The server can read the document too. `GET /docs/:id/content` returns the
+authoritative CRDT state (base64), rebuilt from the durable store with no
 headless browser and no JS. Apply it to a fresh Y.Doc to see what the server
 sees.
 
@@ -17,6 +17,7 @@ sees.
 
 ```bash
 bundle install
+bin/rails db:prepare
 
 # Build the local client package used by the demo
 cd ../../packages/yrb-lite-client && npm install && npm run build && cd ../../examples/actioncable-demo
@@ -40,16 +41,18 @@ is the whole integration:
 class DocumentChannel < ApplicationCable::Channel
   include YrbLite::ActionCable::Sync
 
+  on_load  { |key| Store.current.replay(key) }
+  on_change { |key, update| Store.current.record(key, update) }
+
   def subscribed = sync_for(params[:id])
-  def receive(data) = sync_receive(data)
+  def receive(data) = sync_receive(data, params[:id])
   def unsubscribed = sync_unsubscribed(params[:id])
 end
 ```
 
-One shared `YrbLite::Awareness` (document plus presence) lives in memory per
-document key. ActionCable's worker threads call into it concurrently, which is
-safe because yrb-lite's native types are `Send + Sync` and release the GVL
-during CRDT work. Add `on_load`/`on_save` callbacks to persist documents.
+The channel is store-backed. `on_load` rebuilds state from the durable store;
+`on_change` records each document delta before the server broadcasts or acks it.
+No authoritative document state lives in ActionCable process memory.
 
 The browser side uses `yrb-lite-client`'s `ActionCableProvider`. Tiptap's
 Collaboration and CollaborationCursor extensions plug into the provider's shared
@@ -105,8 +108,8 @@ processes.
 
 ## Durable store: Postgres or file
 
-`AUDIT=1` wires yrb-lite's `on_load`/`on_change` to a durable store. Two are
-included, selected by `STORE_KIND`:
+The demo always wires yrb-lite's `on_load`/`on_change` to a durable store. Two
+stores are included, selected by `STORE_KIND`:
 
 - `pg` (default), in [`app/lib/pg_store.rb`](app/lib/pg_store.rb): a
   `document_changes` table with one committed row per change. It's a
@@ -126,14 +129,14 @@ bin/rails db:prepare   # creates yrb_lite_demo_development + document_changes
 (`config/database.yml` defaults to the local socket as `$USER`.) `GET
 /docs/:id/audit` returns the stored deltas (base64).
 
-## Authoritative audit mode
+## Record Before Distribute
 
-Boot with `AUDIT=1` and the channel records every change durably, in a single
-total order, before it's applied or broadcast, using yrb-lite's `on_change`
-hook. `GET /docs/:id/audit` returns the log as base64 CRDT deltas.
+The channel records every change durably before it broadcasts or acknowledges
+it, using yrb-lite's `on_change` hook. `GET /docs/:id/audit` returns the log as
+base64 CRDT deltas.
 
 ```bash
-AUDIT=1 RAILS_MAX_THREADS=16 CABLE_WORKERS=16 bin/rails s -p 3777
+RAILS_MAX_THREADS=16 CABLE_WORKERS=16 bin/rails s -p 3777
 
 cd frontend && bun audit.mjs
 ```
@@ -164,7 +167,7 @@ until it's stored.
 ## Hostile input (chaos)
 
 ```bash
-AUDIT=1 bin/rails s -p 3777
+bin/rails s -p 3777
 cd frontend && bun chaos.mjs
 ```
 
@@ -172,21 +175,21 @@ A vandal client sprays malformed frames (bad base64, random bytes, truncated,
 oversized, multi-message, and unknown-type protocol messages, spoofed
 awareness, broken envelopes) while good clients edit. The test checks that the
 server stays up, the good clients still converge byte-for-byte, a second room is
-untouched, and in audit mode the garbage is never logged as a change. Malformed
+untouched, and garbage is never logged as a change. Malformed
 or multi-message frames get dropped before they can be processed or relayed, so
 one bad client can't disrupt the others.
 
 ## Crash recovery
 
 ```bash
-AUDIT=1 bin/rails s -p 3777
+bin/rails s -p 3777
 cd frontend && ROOM=crash-1 PHASE=write bun crash_recovery.mjs
 # ... kill -9 the server, then restart it ...
-AUDIT=1 bin/rails s -p 3777
+bin/rails s -p 3777
 cd frontend && ROOM=crash-1 PHASE=verify bun crash_recovery.mjs
 ```
 
-Audit mode fsyncs every change before it's applied or broadcast, so every
+The file store fsyncs every change before it's broadcast, so every
 acknowledged edit is on disk when the server dies. After a hard `kill -9` and
 restart, `on_load` replays the log (`AuditLog.replay` tolerates a torn final
 line from a crash mid-append) and the document comes back whole. A server that
@@ -203,41 +206,38 @@ processes. Boot two servers and split clients across them:
 # needs a running Redis
 redis-server &   # or `brew services start redis`
 
-AUDIT=1 CABLE_ADAPTER=redis bin/rails s -p 3777 -P tmp/pids/s3777.pid &
-AUDIT=1 CABLE_ADAPTER=redis bin/rails s -p 3778 -P tmp/pids/s3778.pid &
+CABLE_ADAPTER=redis bin/rails s -p 3777 -P tmp/pids/s3777.pid &
+CABLE_ADAPTER=redis bin/rails s -p 3778 -P tmp/pids/s3778.pid &
 
 cd frontend && PORTS=3777,3778 bun multiprocess.mjs
 ```
 
 Clients are split across the two processes. The test checks cross-process
-convergence (byte-for-byte), that both processes' server-side replicas stay
-current (server reads and a late joiner's handshake), cross-process presence,
-and a single shared audit log with every change recorded exactly once.
+convergence (byte-for-byte), server reads and late-join handshakes from the
+shared store, cross-process presence, and a single shared audit log with every
+change recorded exactly once.
 
-Liveness rides the Redis cable adapter. Each process applies broadcasts that
-originated elsewhere to its own in-memory replica (the CRDT merge is
-idempotent), and the shared audit log is the source of truth for cold loads via
-`on_load`. Each process appends to the same `tmp/audit` log with atomic
-`O_APPEND`, so the audit history is global and record-before-distribute holds
-across processes.
+Liveness rides the Redis cable adapter. The shared store is the source of truth
+for every process via `on_load`, so record-before-distribute holds across
+processes.
 
 ## AnyCable
 
 AnyCable terminates WebSockets in a Go process and runs channel logic in a
-separate Ruby RPC server, so the in-memory-replica backend doesn't fit.
-`SYNC_BACKEND=store` switches the channel to the stateless, store-backed path,
-where documents come from the audit log rather than process memory.
+separate Ruby RPC server. yrb-lite's ActionCable concern is already stateless
+and store-backed, so documents come from the durable store rather than process
+memory.
 
 ```bash
 # 1) AnyCable RPC server (channel logic in Ruby)
-AUDIT=1 SYNC_BACKEND=store CABLE_ADAPTER=any_cable bundle exec anycable
+CABLE_ADAPTER=any_cable bundle exec anycable
 
 # 2) anycable-go (WebSocket server, :8080; brew install anycable-go)
 anycable-go --host=127.0.0.1 --port=8080 --rpc_host=127.0.0.1:50051 \
   --broadcast_adapter=redis --redis_url=redis://localhost:6379/15
 
 # 3) Rails HTTP (pages + /content), broadcasting via AnyCable
-AUDIT=1 SYNC_BACKEND=store CABLE_ADAPTER=any_cable bin/rails s -p 3777
+CABLE_ADAPTER=any_cable bin/rails s -p 3777
 
 # Probe + concurrent storm (WS on anycable-go :8080, HTTP on Puma :3777):
 cd frontend
@@ -263,7 +263,7 @@ at anycable-go (`action_cable_meta_tag` emits it), then run the Playwright
 suites against the Puma page port. The WebSockets go to anycable-go:
 
 ```bash
-AUDIT=1 SYNC_BACKEND=store CABLE_ADAPTER=any_cable \
+CABLE_ADAPTER=any_cable \
   CABLE_URL=ws://localhost:8080/cable bin/rails s -p 3777
 cd frontend && PORTS=3777 bun multi_browser.mjs   # all scenarios
 PORTS=3777 bun four_browsers.mjs                  # 4 browsers typing at once
@@ -297,11 +297,9 @@ clients, 8,800 edits, ~360k cable messages, 41k concurrent `/content` reads, all
 
 ## Production notes
 
-- Use `sync_backend :store` with `on_load` and `on_change` for AnyCable and
-  multi-process deployments. The durable store is the source of truth; channel
-  instances are stateless per message.
-- The memory backend is useful for local ActionCable demos and single-process
-  experiments. A real multi-process deployment needs a shared cable adapter and
-  durable load/record hooks.
+- Provide durable `on_load` and `on_change` hooks. The durable store is the
+  source of truth; channel instances are stateless per message.
+- Use a shared cable adapter such as Redis or solid_cable for multi-process
+  deployments.
 - `config.action_cable.disable_request_forgery_protection` is on in development
   so the e2e script can connect without an Origin header.

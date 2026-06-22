@@ -2,8 +2,8 @@
 // multiple real clients and a fault-injectable store. The guarantee under test:
 // no one else sees a change until it has been stored.
 //
-//   1. Boot in audit mode:  AUDIT=1 RAILS_MAX_THREADS=8 CABLE_WORKERS=8 bin/rails s -p 3777
-//   2. Run:                 cd frontend && bun audit_scenarios.mjs
+//   1. Boot the server:  RAILS_MAX_THREADS=8 CABLE_WORKERS=8 bin/rails s -p 3777
+//   2. Run:              cd frontend && bun audit_scenarios.mjs
 //
 // Scenarios:
 //   1. Slow store       while a change is being stored, no other client sees

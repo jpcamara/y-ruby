@@ -4,7 +4,7 @@
 // server" failure that a plain CRDT provider loses forever (the server is idle,
 // so it never knows anything is missing and never asks anyone to resync).
 //
-//   1. Boot the Rails server:  bin/rails s -p 3777   (AUDIT=1 also works)
+//   1. Boot the Rails server:  bin/rails s -p 3777
 //   2. Run:                    cd frontend && bun reliable.mjs
 //
 // The reliable client tags each outgoing update with an incrementing id, keeps

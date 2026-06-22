@@ -7,7 +7,7 @@
 //      provider's own retransmit -- no reconnect, no follow-up edit -- and the
 //      ack drains its pending queue.
 //
-//   bin/rails s -p 3777        (AUDIT=1 also works)
+//   bin/rails s -p 3777
 //   cd frontend && bun reliable_provider.mjs
 //
 // We hand the provider a minimal raw-WebSocket ActionCable consumer. The

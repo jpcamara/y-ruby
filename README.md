@@ -27,9 +27,9 @@ provider's Awareness instance, unless you supply your own.
   across Puma threads; native CRDT work runs with the GVL released.
 - The y-websocket protocol (document sync plus awareness/presence) as a
   one-include ActionCable concern.
-- A store-backed mode for AnyCable and multi-process deployments.
-- An optional authoritative mode that records each change durably before it
-  goes out to anyone.
+- Store-backed ActionCable/AnyCable delivery for multi-process deployments.
+- Authoritative record-before-distribute semantics: each document change is
+  recorded durably before it goes out to anyone.
 
 What it doesn't do: auth, read-only connections, rate limiting, webhooks,
 metrics. Hocuspocus ships extensions for those; here you'd build them with
@@ -143,16 +143,15 @@ awareness/presence) over ActionCable:
 class DocumentChannel < ApplicationCable::Channel
   include YrbLite::ActionCable::Sync
 
-  # Optional persistence:
-  # on_load { |key| Document.find_by(key: key)&.content }
-  # on_save { |key, update| Document.find_by(key: key)&.update!(content: update) }
+  on_load { |key| MyStore.load(key) }                 # source of truth
+  on_change { |key, update| MyStore.append(key, update) } # durable record
 
   def subscribed
     sync_for params[:id]
   end
 
   def receive(data)
-    sync_receive(data)
+    sync_receive(data, params[:id])
   end
 
   def unsubscribed
@@ -161,19 +160,17 @@ class DocumentChannel < ApplicationCable::Channel
 end
 ```
 
-One `YrbLite::Awareness` is shared per document key. Creating it is
-mutex-serialized. After that, native calls run with the GVL released: document
-operations use yrs' internal document lock, and awareness mutations are
-serialized by the wrapper mutex. The concern answers SyncStep1 directly, relays
-document and awareness changes to the other subscribers (not back to the
-sender), and calls `on_save` after any message that changed the document.
+The concern is store-backed. A handshake is answered from `on_load`; document
+changes are checked against that durable state, recorded through `on_change`,
+then broadcast. Nothing authoritative is kept in ActionCable process memory, so
+AnyCable RPC workers, Puma workers, and separate dynos can all handle messages
+for the same document as long as they share the same store and cable adapter.
 
-`sync_unsubscribed` clears the connection's presence, so a closed tab doesn't
-leave a stale cursor hanging until the client-side timeout. It also unloads the
-document from memory once the last subscriber disconnects, which keeps the
-process from holding onto every document it ever served. That unload only
-happens when `on_load` is set and the document can be reloaded later; without
-it, the in-memory copy is the only one and stays put.
+`on_load` and `on_change` are required. If either is missing, the channel fails
+closed before it can acknowledge or broadcast edits. Presence is ephemeral:
+awareness frames are relayed, and `yrb-lite-client` sends a best-effort
+presence-removal frame on disconnect/pagehide, with the client-side awareness
+timeout as the fallback for abrupt disconnects.
 
 Incoming frames are validated as a single well-formed protocol message before
 anything processes or relays them. Malformed, truncated, multi-message,
@@ -190,37 +187,19 @@ Broadcasts cross processes through the Action Cable adapter, so it needs to be a
 real one (`redis` or `solid_cable`, not `async`). With that in place, a change
 on one process reaches clients on all of them.
 
-Each process also keeps its own copy of the document and applies broadcasts from
-the others. The merge is an ordinary CRDT apply, idempotent and
-order-independent, which keeps server reads and new-client handshakes current on
-every process. Each broadcast carries a per-process id (`Sync.process_id`) that
-tells a process to skip its own.
-
-A cold process (no copy yet) rebuilds from the durable store through `on_load`.
-In authoritative mode the store is always current, since changes are recorded
-before they go out. Record-before-distribute therefore holds across processes:
-whichever process receives a change records it to the shared store before
-anyone, anywhere, sees it.
+Every process rebuilds document state from the durable store through `on_load`.
+Because changes are recorded before broadcast, record-before-distribute holds
+across processes: whichever process receives a change records it to the shared
+store before anyone, anywhere, sees it.
 
 `bun multiprocess.mjs` in the demo runs clients across two processes and checks
-the lot: convergence, fresh copies on both, presence across processes, and one
-shared log.
+convergence, fresh reads on both, presence across processes, and one shared log.
 
-##### AnyCable (`sync_backend :store`)
-
-The default backend keeps that warm in-memory copy and relies on a `stream_from`
-block running in Ruby for each broadcast. AnyCable breaks both assumptions.
-anycable-go delivers broadcasts outside Ruby, so the block never runs. Each RPC
-gets a fresh channel instance, which means ivars set in `subscribed` are gone by
-`receive`. And there's no fixed worker-to-document mapping to lean on.
-
-`sync_backend :store` is the path for that: stateless per message, no warm
-copy.
+##### AnyCable
 
 ```ruby
 class DocumentChannel < ApplicationCable::Channel
   include YrbLite::ActionCable::Sync
-  sync_backend :store
 
   on_load  { |key| MyStore.load(key) }          # required: source of truth
   on_change { |key, update| MyStore.append(key, update) }  # required: record
@@ -263,12 +242,10 @@ provider.connect()
 [`examples/actioncable-demo`](examples/actioncable-demo) is a full Rails + Tiptap
 app using the yrb-lite provider, with end-to-end tests.
 
-#### Authoritative audit mode (record before distribute)
+#### Record Before Distribute
 
-By default a change is applied and broadcast immediately (the fast path). If you
-need to durably record every change before anyone else sees it, whether for
-auditing or to guarantee nothing is distributed until it's stored, register an
-`on_change` recorder:
+Every document change is durably recorded before anyone else sees it. Register
+an `on_change` recorder:
 
 ```ruby
 class DocumentChannel < ApplicationCable::Channel
@@ -280,36 +257,31 @@ class DocumentChannel < ApplicationCable::Channel
   end
 
   def subscribed = sync_for(params[:id])
-  def receive(data) = sync_receive(data)
+  def receive(data) = sync_receive(data, params[:id])
   def unsubscribed = sync_unsubscribed(params[:id])
 end
 ```
 
 With `on_change` registered, a change is recorded before it goes anywhere. The
 recorder writes the raw CRDT delta synchronously; only then is the change
-applied to the shared document and broadcast. The whole sequence runs under a
-per-document lock, so every change to a document is recorded in the same order
-it's applied. That's what makes the log authoritative. Replay the deltas onto a
-fresh `Y.Doc` and you get the document back exactly.
+broadcast. Replay the deltas onto a fresh `Y.Doc` and you get the document back
+exactly.
 
 If the recorder raises (say the store is down), the change is rejected: not
 applied, not sent to anyone. The cost is a synchronous durable write per change,
 which serializes that document's writes. Other documents use other locks and run
 in parallel.
 
-`on_change` and `on_save` are separate. `on_save` snapshots the whole document
-when it gets a chance; `on_change` is the per-change log. The demo's `AUDIT=1`
-mode (in [`examples/actioncable-demo`](examples/actioncable-demo)) wires
-`on_change` to an fsync'd append-only log and checks, end to end, that the log
-alone rebuilds the document.
+The demo wires `on_change` to a durable Postgres-backed log by default, with an
+fsync'd file log available via `STORE_KIND=file`, and checks end to end that the
+log alone rebuilds the document.
 
 #### Reliable delivery (acks)
 
 yrb-lite document delivery is ack-tracked. Browser document updates carry an
 `"id"`, and the server replies `{ "ack": <id> }` once the update has been
-**accepted** -- recorded in audit mode, applied in fast mode. A causally-gapped
-update is not acked; the server sends a resync request, and the client keeps the
-update queued until it lands.
+**durably recorded**. A causally-gapped update is not acked; the server sends a
+resync request, and the client keeps the update queued until it lands.
 
 ```
 client -> server   { "update": "<base64 update>", "id": 42 }
