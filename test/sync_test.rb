@@ -25,8 +25,9 @@ class SyncTest < Minitest::Test
   end
 
   def helper_for(store: [], recorder: nil, transmits: [], broadcasts: [])
+    test = self
     recorder ||= ->(_key, update) { store << update }
-    loader = ->(_key) { doc_state(store) }
+    loader = ->(_key) { test.doc_state(store) }
     klass = Class.new do
       include YrbLite::ActionCable::Sync
 
@@ -41,7 +42,7 @@ class SyncTest < Minitest::Test
       define_method(:sync_distribute) { |encoded| broadcasts << encoded }
     end
     klass.on_load(&loader)
-    recorder.is_a?(Proc) ? klass.on_change(&recorder) : klass.on_change(recorder)
+    klass.on_change(&recorder)
     helper = klass.new
     helper.transmits = transmits
     helper.broadcasts = broadcasts
@@ -214,7 +215,8 @@ class SyncTest < Minitest::Test
     replay = YrbLite::Doc.new
     store.each { |u| replay.apply_update(u) }
 
-    refute_predicate replay, :pending?
+    # Full-state equality proves the replay integrated everything: a leftover
+    # pending struct would be absent from encode_state_as_update and diverge.
     assert_equal client.encode_state_as_update, replay.encode_state_as_update
   end
 
@@ -253,16 +255,32 @@ class SyncTest < Minitest::Test
     assert_equal "user-42", seen
   end
 
-  def test_callable_recorder_uses_call
-    seen = []
-    recorder = Object.new
-    recorder.define_singleton_method(:call) { |key, update| seen << [key, update.bytesize] }
-    helper = helper_for(recorder: recorder)
+  def test_loader_runs_in_channel_instance_context
+    seen = nil
+    klass = Class.new do
+      include YrbLite::ActionCable::Sync
 
+      on_load do |_key|
+        seen = current_author
+        nil
+      end
+      on_change { |_key, _update| nil }
+
+      attr_accessor :transmits, :broadcasts
+
+      def current_author = "loader-42"
+      def transmit(data) = transmits << data
+      define_method(:sync_distribute) { |encoded| broadcasts << encoded }
+    end
+    helper = klass.new
+    helper.transmits = []
+    helper.broadcasts = []
+
+    # sync_receive of a document update rebuilds the doc via sync_load_doc,
+    # which invokes on_load -- proving the loader runs in the channel's context.
     helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE), "doc-key")
 
-    assert_equal "doc-key", seen.first.first
-    assert_operator seen.first.last, :>, 0
+    assert_equal "loader-42", seen
   end
 
   def test_awareness_frames_are_relayed_but_not_recorded

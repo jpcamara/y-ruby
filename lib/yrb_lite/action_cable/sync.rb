@@ -41,15 +41,12 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   # validated against `on_load`, recorded through `on_change`, then broadcast.
   # No authoritative document state is kept in ActionCable process memory.
   module Sync
-    # Validated frame kinds from Awareness#message_kind. A frame only gets a
-    # non-DROP kind if it is exactly one well-formed message; anything
-    # malformed, truncated, multi-message, or unknown is dropped before it can
-    # be processed or relayed.
-    MSG_KIND_DROP = 0
+    # Frame kinds we act on, from Awareness#message_kind. The other codes it can
+    # return -- 0 (drop: malformed/truncated/multi-message/unknown) and 4
+    # (awareness query) -- fall through to a no-op in the dispatch below.
     MSG_KIND_SYNC_STEP1 = 1
     MSG_KIND_UPDATE = 2
     MSG_KIND_AWARENESS = 3
-    MSG_KIND_AWARENESS_QUERY = 4
 
     # Default incoming-frame size cap (decoded bytes). Generous enough for a
     # large initial SyncStep2, small enough to bound a single message's
@@ -61,10 +58,11 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     end
 
     module ClassMethods
-      # Load persisted document state. Called once per key with (key);
-      # return a binary Y.js update (or nil for a fresh document).
-      def on_load(callable = nil, &block)
-        @on_load = callable || block if callable || block
+      # Load persisted document state. Called once per key with (key); return a
+      # binary Y.js update (or nil for a fresh document). The block runs in the
+      # channel instance's context, the same as on_change (see below).
+      def on_load(&block)
+        @on_load = block if block
         return @on_load if defined?(@on_load) && @on_load
 
         superclass.respond_to?(:on_load) ? superclass.on_load : nil
@@ -75,13 +73,12 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       # the exact CRDT delta. If the block raises, the change is rejected:
       # neither acknowledged nor broadcast to other subscribers.
       #
-      # A block recorder runs in the *channel instance's* context, so it can
-      # call the channel's own methods (current_user, params, a per-connection
-      # Current.* accessor) directly, with no thread-local plumbing. (A non-Proc
-      # callable is invoked with #call instead, since it carries its own
-      # context.) on_change always fires from within sync_receive.
-      def on_change(callable = nil, &block)
-        @on_change = callable || block if callable || block
+      # The block runs in the *channel instance's* context (via instance_exec),
+      # so it can call the channel's own methods (current_user, params, a
+      # per-connection Current.* accessor) directly, with no thread-local
+      # plumbing. on_change always fires from within sync_receive.
+      def on_change(&block)
+        @on_change = block if block
         return @on_change if defined?(@on_change) && @on_change
 
         superclass.respond_to?(:on_change) ? superclass.on_change : nil
@@ -106,8 +103,11 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       @sync_origin = SecureRandom.hex(8)
       sync_require_store_recorder!
 
-      sync_stream sync_stream_name
-      sync_stream sync_awareness_stream_name, whisper: true if respond_to?(:whispers_to)
+      # The document stream is never whisper-enabled; under AnyCable we also
+      # subscribe an awareness stream with `whisper: true`, scoping the client-to-
+      # client path to ephemeral presence rather than the durable document stream.
+      stream_from sync_stream_name
+      stream_from sync_awareness_stream_name, whisper: true if respond_to?(:whispers_to)
       sync_transmit(sync_load_doc.sync_step1)
     end
 
@@ -145,14 +145,7 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
 
       return if cap && bytes.bytesize > cap
 
-      sync_send_ack(id, sync_dispatch(encoded, bytes))
-    end
-
-    # Route a decoded frame to the backend/path that handles it and return the
-    # outcome symbol (:recorded/:applied/:gap/:noop) used by the reliable-
-    # delivery ack. A dropped frame returns nil (never acked).
-    def sync_dispatch(encoded, bytes)
-      sync_receive_store_backed(encoded, bytes)
+      sync_send_ack(id, sync_handle_frame(encoded, bytes))
     end
 
     # Kept as the ActionCable lifecycle hook target. There is no cached document
@@ -201,7 +194,6 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       transmit(sync_envelope(Base64.strict_encode64(bytes)))
     end
 
-    # Build an outgoing envelope.
     def sync_envelope(encoded, extra = {})
       { "update" => encoded }.merge(extra)
     end
@@ -223,14 +215,6 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
             "that never happened, and a cold load would lose the edit."
     end
 
-    # Subscribe to a broadcast stream. The document stream is never whisper-
-    # enabled; when AnyCable is present we separately subscribe an awareness
-    # stream with `whisper: true`, so the client-to-client path is scoped to
-    # ephemeral presence instead of the durable document stream.
-    def sync_stream(name, **, &)
-      stream_from(name, **, &)
-    end
-
     # Stateless per message: no warm replica, no assumptions about which process
     # owns a document. A client's SyncStep1 is answered from the store, document
     # changes are recorded durably before relay and then broadcast, and
@@ -240,7 +224,7 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     # Returns an outcome symbol for the reliable-delivery ack: :recorded when a
     # document update was durably recorded and relayed, :gap when it was
     # rejected for a resync, :noop for everything else.
-    def sync_receive_store_backed(encoded, bytes)
+    def sync_handle_frame(encoded, bytes)
       sync_require_store_recorder!
 
       case Sync.codec.message_kind(bytes)
@@ -281,7 +265,8 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     # Build a fresh document from the durable store (on_load).
     def sync_load_doc
       doc = YrbLite::Doc.new
-      state = self.class.on_load&.call(@sync_key)
+      loader = self.class.on_load
+      state = instance_exec(@sync_key, &loader) if loader
       doc.apply_update(state) if state
       doc
     end
@@ -294,12 +279,10 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       "#{sync_stream_name}:awareness"
     end
 
-    # Invoke the on_change recorder. A block/proc runs in this channel instance's
-    # context (instance_exec) so it can reach the channel's own methods; a
-    # non-Proc callable is invoked with #call, since it carries its own context.
+    # Invoke the on_change recorder in this channel instance's context
+    # (instance_exec) so it can reach the channel's own methods.
     def sync_record_change(recorder, update)
-      args = [@sync_key, update]
-      recorder.is_a?(Proc) ? instance_exec(*args, &recorder) : recorder.call(*args)
+      instance_exec(@sync_key, update, &recorder)
     end
 
     # -- Shared process state ----------------------------------------------
