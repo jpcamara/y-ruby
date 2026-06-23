@@ -555,7 +555,6 @@ impl RbAwareness {
         let merged = nogvl(move || merged_doc_update(&data_bytes)).map_err(yrb_error)?;
         Ok(merged.map(|b| binary_string(&b)))
     }
-
 }
 
 // ============================================================================
