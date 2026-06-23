@@ -68,12 +68,12 @@ export class YProtocolSession {
   readonly doc: Doc;
   readonly awareness: Awareness | null;
 
-  private _send: YProtocolSessionOptions["send"];
-  private _onError: (error: unknown, context: string) => void;
-  private _synced = false;
-  private _delivery: ReliableSync;
-  private _onDocUpdate: (update: Uint8Array, origin: unknown) => void;
-  private _onAwarenessUpdate?: (change: AwarenessChange, origin: unknown) => void;
+  #send: YProtocolSessionOptions["send"];
+  #onError: (error: unknown, context: string) => void;
+  #synced = false;
+  #delivery: ReliableSync;
+  #onDocUpdate: (update: Uint8Array, origin: unknown) => void;
+  #onAwarenessUpdate?: (change: AwarenessChange, origin: unknown) => void;
 
   constructor(doc: Doc, opts: YProtocolSessionOptions) {
     const {
@@ -89,60 +89,60 @@ export class YProtocolSession {
 
     this.doc = doc;
     this.awareness = awareness;
-    this._send = send;
-    this._onError = onError ?? ((error, context) => console.warn(`[yrb-lite] ${context}:`, error));
+    this.#send = send;
+    this.#onError = onError ?? ((error, context) => console.warn(`[yrb-lite] ${context}:`, error));
 
-    this._delivery = new ReliableSync({
+    this.#delivery = new ReliableSync({
       merge: mergeUpdates,
-      send: (update, id) => this._send(this._frameUpdate(update), id),
+      send: (update, id) => this.#send(this.#frameUpdate(update), id),
       resendInterval,
       setInterval: setIntervalFn,
       clearInterval: clearIntervalFn,
     });
 
-    this._onDocUpdate = (update: Uint8Array, origin: unknown) => {
+    this.#onDocUpdate = (update: Uint8Array, origin: unknown) => {
       if (origin === this) return; // applied from the server; don't echo it back
-      this._delivery.enqueue(update);
+      this.#delivery.enqueue(update);
     };
-    this.doc.on("update", this._onDocUpdate);
+    this.doc.on("update", this.#onDocUpdate);
 
     if (this.awareness) {
-      this._onAwarenessUpdate = ({ added, updated, removed }: AwarenessChange, origin: unknown) => {
+      this.#onAwarenessUpdate = ({ added, updated, removed }: AwarenessChange, origin: unknown) => {
         // Only broadcast OUR OWN presence changes (origin "local"). Updates we
         // applied from a peer -- and our own remote-cleanup in onDisconnect --
         // carry origin === this; re-sending those would echo presence and
         // broadcast tombstones for other clients' cursors.
         if (origin === this) return;
         const changed = added.concat(updated, removed);
-        this._send(this._frameAwareness(changed), undefined, { awareness: true }); // fire-and-forget
+        this.#send(this.#frameAwareness(changed), undefined, { awareness: true }); // fire-and-forget
       };
-      this.awareness.on("update", this._onAwarenessUpdate);
+      this.awareness.on("update", this.#onAwarenessUpdate);
     }
   }
 
   /** True once we've received the server's SyncStep2 (the document is caught up). */
   get synced(): boolean {
-    return this._synced;
+    return this.#synced;
   }
 
   /** True while there are unacknowledged local document updates in flight. */
   get hasPending(): boolean {
-    return this._delivery.hasPending;
+    return this.#delivery.hasPending;
   }
 
   /** Transport connected: send the opening handshake and replay the unacked tail. */
   onConnect(): void {
-    this._send(this._frameSyncStep1(), undefined);
+    this.#send(this.#frameSyncStep1(), undefined);
     if (this.awareness && this.awareness.getLocalState() !== null) {
-      this._send(this._frameAwareness([this.doc.clientID]), undefined, { awareness: true });
+      this.#send(this.#frameAwareness([this.doc.clientID]), undefined, { awareness: true });
     }
-    this._delivery.onConnect();
+    this.#delivery.onConnect();
   }
 
   /** Transport dropped: pause retransmits (queue kept) and clear remote presence. */
   onDisconnect(): void {
-    this._synced = false;
-    this._delivery.onDisconnect();
+    this.#synced = false;
+    this.#delivery.onDisconnect();
     if (this.awareness) {
       const remote = [...this.awareness.getStates().keys()].filter((c) => c !== this.doc.clientID);
       if (remote.length) removeAwarenessStates(this.awareness, remote, this);
@@ -163,7 +163,7 @@ export class YProtocolSession {
 
   /** A reliable-delivery `{ ack: id }` envelope arrived. */
   ack(id: number): void {
-    this._delivery.onAck(id);
+    this.#delivery.onAck(id);
   }
 
   /**
@@ -175,7 +175,7 @@ export class YProtocolSession {
     // A malformed/truncated frame must never take down the transport callback:
     // decode + apply defensively, drop the frame on error, keep the session live.
     try {
-      const validatedType = this._validateFrame(frame);
+      const validatedType = this.#validateFrame(frame);
       if (validatedType === null) return null;
 
       const decoder = decoding.createDecoder(frame);
@@ -185,7 +185,7 @@ export class YProtocolSession {
         case MessageType.Sync: {
           encoding.writeVarUint(encoder, MessageType.Sync);
           const syncType = readSyncMessage(decoder, encoder, this.doc, this);
-          if (!this._synced && syncType === messageYjsSyncStep2) this._synced = true;
+          if (!this.#synced && syncType === messageYjsSyncStep2) this.#synced = true;
           break;
         }
         case MessageType.Awareness:
@@ -208,40 +208,40 @@ export class YProtocolSession {
       }
       return encoding.length(encoder) > 1 ? encoding.toUint8Array(encoder) : null;
     } catch (error) {
-      this._onError(error, "receive");
+      this.#onError(error, "receive");
       return null;
     }
   }
 
   /** Detach doc/awareness listeners and stop retransmits. */
   destroy(): void {
-    this.doc.off("update", this._onDocUpdate);
-    if (this.awareness && this._onAwarenessUpdate) this.awareness.off("update", this._onAwarenessUpdate);
-    this._delivery.destroy();
+    this.doc.off("update", this.#onDocUpdate);
+    if (this.awareness && this.#onAwarenessUpdate) this.awareness.off("update", this.#onAwarenessUpdate);
+    this.#delivery.destroy();
   }
 
-  private _frameSyncStep1(): Uint8Array {
+  #frameSyncStep1(): Uint8Array {
     const e = encoding.createEncoder();
     encoding.writeVarUint(e, MessageType.Sync);
     writeSyncStep1(e, this.doc);
     return encoding.toUint8Array(e);
   }
 
-  private _frameUpdate(update: Uint8Array): Uint8Array {
+  #frameUpdate(update: Uint8Array): Uint8Array {
     const e = encoding.createEncoder();
     encoding.writeVarUint(e, MessageType.Sync);
     writeUpdate(e, update);
     return encoding.toUint8Array(e);
   }
 
-  private _frameAwareness(clients: number[]): Uint8Array {
+  #frameAwareness(clients: number[]): Uint8Array {
     const e = encoding.createEncoder();
     encoding.writeVarUint(e, MessageType.Awareness);
     encoding.writeVarUint8Array(e, encodeAwarenessUpdate(this.awareness as Awareness, clients));
     return encoding.toUint8Array(e);
   }
 
-  private _validateFrame(frame: Uint8Array): number | null {
+  #validateFrame(frame: Uint8Array): number | null {
     const decoder = decoding.createDecoder(frame);
     const type = decoding.readVarUint(decoder);
     switch (type) {
