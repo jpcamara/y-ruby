@@ -114,6 +114,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
 
+      # anycable-go: the Go WebSocket gateway for the AnyCable e2e run. Pinned
+      # binary from releases (no extra action dependency).
+      - name: Install anycable-go
+        run: |
+          curl -fsSL https://github.com/anycable/anycable-go/releases/download/v1.5.6/anycable-go-linux-amd64 -o /tmp/anycable-go
+          sudo install -m 0755 /tmp/anycable-go /usr/local/bin/anycable-go
+          anycable-go --version
+
       # Build + install the gem exactly as a fresh checkout would.
       - name: Build the gem
         run: bundle exec rake compile
@@ -179,3 +187,20 @@ jobs:
           SERVER=puma WORKERS=1 PORT=3782 SERVER_PIDFILE=/tmp/mp2.pid frontend/boot_server.sh
           PORTS=3781,3782 bun frontend/multiprocess.mjs
           kill "$(cat /tmp/mp1.pid)" "$(cat /tmp/mp2.pid)" || true
+
+      # The same stack under AnyCable: WebSockets terminate in anycable-go (Go),
+      # channel logic runs in a separate Ruby RPC server, and Puma serves pages
+      # + /content + broadcasts — three processes sharing documents through the
+      # durable store and Redis. Proves yrb-lite's concern works the same on
+      # AnyCable as on plain ActionCable: concurrent convergence with a complete
+      # store, record-before-distribute under slow/failing stores, and reliable
+      # retransmit through the Go gateway.
+      - name: E2e — AnyCable (Go gateway + RPC, Redis)
+        working-directory: examples/actioncable-demo
+        run: |
+          HTTP_PORT=3797 WS_PORT=8080 ANYCABLE_PIDFILE=/tmp/anycable.pid frontend/anycable_boot.sh
+          cd frontend
+          WS_PORT=8080 HTTP_PORT=3797 CLIENTS=6 bun anycable_concurrent.mjs
+          WS_PORT=8080 HTTP_PORT=3797 bun anycable_guarantee.mjs
+          PORT=8080 bun reliable_provider.mjs
+          kill $(cat /tmp/anycable.pid) || true

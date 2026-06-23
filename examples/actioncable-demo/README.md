@@ -146,8 +146,9 @@ kill "$(cat /tmp/falcon.pid)"
 ```
 
 CI runs the slice under both a Puma cluster and a Falcon cluster (2 workers
-each, Redis), plus the two-process cross-process test (`multiprocess.mjs`) and
-the agent-browser test on the Puma cluster.
+each, Redis), plus the two-process cross-process test (`multiprocess.mjs`), the
+agent-browser test on the Puma cluster, and the AnyCable stack (see below) — so
+both ActionCable and AnyCable are covered.
 
 ## Durable store: Postgres or file
 
@@ -287,6 +288,18 @@ cd frontend
 WS_PORT=8080 HTTP_PORT=3777 bun anycable_probe.mjs
 WS_PORT=8080 HTTP_PORT=3777 CLIENTS=6 bun anycable_concurrent.mjs
 PORT=8080 bun reliable_provider.mjs
+```
+
+`frontend/anycable_boot.sh` automates booting all three processes (RPC server,
+anycable-go, Puma) and waits until the stack is healthy; CI uses it to run
+`anycable_concurrent.mjs`, `anycable_guarantee.mjs`, and `reliable_provider.mjs`
+through the gateway:
+
+```bash
+export REDIS_URL=redis://localhost:6379/15
+HTTP_PORT=3797 WS_PORT=8080 ANYCABLE_PIDFILE=/tmp/anycable.pid frontend/anycable_boot.sh
+cd frontend && WS_PORT=8080 HTTP_PORT=3797 CLIENTS=6 bun anycable_concurrent.mjs
+kill $(cat /tmp/anycable.pid)
 ```
 
 `anycable_probe.mjs` confirms liveness and that Puma's `/content` reflects the
