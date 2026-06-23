@@ -48,30 +48,34 @@ export class ReliableSync {
   /** Unacked local updates, in order. */
   pending: Pending[] = [];
 
-  private _send: ReliableSyncOptions["send"];
-  private _merge: ReliableSyncOptions["merge"];
-  private resendInterval: number;
-  private _setInterval: (handler: () => void, ms: number) => TimerHandle;
-  private _clearInterval: (handle: TimerHandle) => void;
+  #send: ReliableSyncOptions["send"];
+  #merge: ReliableSyncOptions["merge"];
+  #resendInterval: number;
+  #setInterval: (handler: () => void, ms: number) => TimerHandle;
+  #clearInterval: (handle: TimerHandle) => void;
 
-  private nextSeq = 1;
-  private _connected = false;
-  private _timer: TimerHandle | undefined = undefined;
+  #nextSeq = 1;
+  #connected = false;
+  #timer: TimerHandle | undefined = undefined;
   // Memoized merge of the unacked tail. The tail only changes on enqueue/ack, so
   // retransmit ticks reuse this instead of re-merging the whole queue each time.
-  private _tailCache: Uint8Array | undefined = undefined;
+  #tailCache: Uint8Array | undefined = undefined;
 
   constructor(opts: ReliableSyncOptions) {
     const { send, merge, resendInterval } = opts ?? ({} as ReliableSyncOptions);
     if (typeof send !== "function") throw new TypeError("ReliableSync requires a send(update, id) function");
     if (typeof merge !== "function") throw new TypeError("ReliableSync requires a merge(updates) function");
 
-    this._send = send;
-    this._merge = merge;
-    this.resendInterval = resendInterval ?? DEFAULTS.resendInterval;
+    this.#send = send;
+    this.#merge = merge;
+    const interval = resendInterval ?? DEFAULTS.resendInterval;
+    if (!Number.isFinite(interval) || interval <= 0) {
+      throw new TypeError("ReliableSync resendInterval must be a positive number");
+    }
+    this.#resendInterval = interval;
     // Injectable timer hooks make the resend loop testable; default to globals.
-    this._setInterval = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
-    this._clearInterval = opts.clearInterval ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
+    this.#setInterval = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
+    this.#clearInterval = opts.clearInterval ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
   }
 
   /** True while there are unacknowledged local updates. */
@@ -84,8 +88,9 @@ export class ReliableSync {
    * flushed; the update remains retained until the server acknowledges it.
    */
   enqueue(update: Uint8Array): void {
-    this.pending.push({ seq: this.nextSeq++, update });
-    this._tailCache = undefined; // tail changed
+    this.pending.push({ seq: this.#nextSeq++, update });
+    this.#tailCache = undefined; // tail changed
+    if (this.#connected) this.#startTimer();
     this.flush();
   }
 
@@ -95,8 +100,8 @@ export class ReliableSync {
    * No-op while disconnected (the tail is replayed on the next onConnect).
    */
   flush(): void {
-    if (!this._connected || this.pending.length === 0) return;
-    this._send(this._mergedTail(), this.pending[this.pending.length - 1].seq);
+    if (!this.#connected || this.pending.length === 0) return;
+    this.#send(this.#mergedTail(), this.pending[this.pending.length - 1].seq);
   }
 
   /**
@@ -109,20 +114,21 @@ export class ReliableSync {
     if (!Number.isSafeInteger(id) || id < 0) return; // malformed / impossible
     if (this.pending.length > 0 && id > this.pending[this.pending.length - 1].seq) return; // future ack
     this.pending = this.pending.filter((p) => p.seq > id);
-    this._tailCache = undefined; // tail changed
+    this.#tailCache = undefined; // tail changed
+    if (this.pending.length === 0) this.#stopTimer();
   }
 
   /** Transport (re)connected: replay the unacked tail and resume retransmits. */
   onConnect(): void {
-    this._connected = true;
+    this.#connected = true;
     this.flush();
-    this._startTimer();
+    if (this.pending.length > 0) this.#startTimer();
   }
 
   /** Transport dropped: keep the queue (for reconnect replay), pause the timer. */
   onDisconnect(): void {
-    this._connected = false;
-    this._stopTimer();
+    this.#connected = false;
+    this.#stopTimer();
   }
 
   /**
@@ -130,35 +136,36 @@ export class ReliableSync {
    * the internal timer.
    */
   onTick(): void {
-    if (!this._connected || this.pending.length === 0) return;
+    if (!this.#connected || this.pending.length === 0) return;
     this.flush();
   }
 
   /** Stop timers and drop references. Call when the provider is destroyed. */
   destroy(): void {
-    this._stopTimer();
+    this.#connected = false;
+    this.#stopTimer();
     this.pending = [];
-    this._tailCache = undefined;
+    this.#tailCache = undefined;
   }
 
   /** The unacked tail merged into one delta (memoized between tail changes). */
-  private _mergedTail(): Uint8Array {
-    if (this._tailCache === undefined) {
+  #mergedTail(): Uint8Array {
+    if (this.#tailCache === undefined) {
       const updates = this.pending.map((p) => p.update);
-      this._tailCache = updates.length === 1 ? updates[0] : this._merge(updates);
+      this.#tailCache = updates.length === 1 ? updates[0] : this.#merge(updates);
     }
-    return this._tailCache;
+    return this.#tailCache;
   }
 
-  private _startTimer(): void {
-    if (this._timer !== undefined) return;
-    this._timer = this._setInterval(() => this.onTick(), this.resendInterval);
-    const t = this._timer as { unref?: () => void };
+  #startTimer(): void {
+    if (this.#timer !== undefined) return;
+    this.#timer = this.#setInterval(() => this.onTick(), this.#resendInterval);
+    const t = this.#timer as { unref?: () => void };
     if (t && typeof t.unref === "function") t.unref();
   }
 
-  private _stopTimer(): void {
-    if (this._timer !== undefined) this._clearInterval(this._timer);
-    this._timer = undefined;
+  #stopTimer(): void {
+    if (this.#timer !== undefined) this.#clearInterval(this.#timer);
+    this.#timer = undefined;
   }
 }

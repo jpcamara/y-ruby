@@ -2,12 +2,12 @@
 export { ReliableSync } from "./reliable_sync.js";
 export type { ReliableSyncOptions, TimerHandle } from "./reliable_sync.js";
 
-// Batteries-included protocol session (sync steps + encode/decode + awareness).
+// Protocol session (sync steps + encode/decode + awareness).
 // Requires `yjs` and `y-protocols` as peers.
 export { YProtocolSession, MessageType } from "./y_protocol_session.js";
 export type { YProtocolSessionOptions, SendOptions } from "./y_protocol_session.js";
 
-// Ready-made ActionCable / AnyCable provider built on YProtocolSession.
+// ActionCable / AnyCable provider built on YProtocolSession.
 // Bring your own provider instead by composing YProtocolSession.
 export { ActionCableProvider } from "./actioncable_provider.js";
 export type {

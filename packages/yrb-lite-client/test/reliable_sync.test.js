@@ -7,14 +7,16 @@ function harness(opts = {}) {
   const sent = []; // [{ update, id }]
   const mergeCalls = []; // arrays passed to merge
   let tickFn = null;
+  let intervalMs = null;
   const rs = new ReliableSync({
     send: (update, id) => sent.push({ update, id }),
     merge: (updates) => {
       mergeCalls.push(updates);
       return { merged: updates.slice() }; // a distinct, inspectable value
     },
-    setInterval: (fn) => {
+    setInterval: (fn, ms) => {
       tickFn = fn;
+      intervalMs = ms;
       return 1;
     },
     clearInterval: () => {
@@ -22,7 +24,14 @@ function harness(opts = {}) {
     },
     ...opts,
   });
-  return { rs, sent, mergeCalls, tick: () => tickFn && tickFn(), hasTimer: () => tickFn !== null };
+  return {
+    rs,
+    sent,
+    mergeCalls,
+    tick: () => tickFn && tickFn(),
+    hasTimer: () => tickFn !== null,
+    intervalMs: () => intervalMs,
+  };
 }
 
 const u = (n) => new Uint8Array([n]); // a stand-in update
@@ -30,6 +39,13 @@ const u = (n) => new Uint8Array([n]); // a stand-in update
 test("requires send and merge", () => {
   assert.throws(() => new ReliableSync({ merge: () => {} }), /send/);
   assert.throws(() => new ReliableSync({ send: () => {} }), /merge/);
+});
+
+test("requires a positive resendInterval", () => {
+  const base = { send: () => {}, merge: () => new Uint8Array() };
+  assert.throws(() => new ReliableSync({ ...base, resendInterval: 0 }), /resendInterval/);
+  assert.throws(() => new ReliableSync({ ...base, resendInterval: -1 }), /resendInterval/);
+  assert.throws(() => new ReliableSync({ ...base, resendInterval: NaN }), /resendInterval/);
 });
 
 test("queues while disconnected, replays the tail on connect", () => {
@@ -112,6 +128,7 @@ test("unacked updates stay retained and keep retransmitting until acked", () => 
 
   h.rs.onAck(1);
   assert.equal(h.rs.hasPending, false, "ack drains the retained update");
+  assert.equal(h.hasTimer(), false, "the retransmit timer stops once the queue drains");
 });
 
 test("onAck ignores malformed, negative, and impossible future acks", () => {
@@ -144,4 +161,44 @@ test("the merged tail is memoized across retransmit ticks, invalidated on change
 
   h.rs.enqueue(u(3)); // tail changed -> next flush re-merges
   assert.equal(h.mergeCalls.length, mergesAfterFlush + 1, "enqueue invalidates the cache");
+});
+
+test("connect with an empty queue does not start the retransmit timer", () => {
+  const h = harness();
+  h.rs.onConnect();
+  assert.equal(h.hasTimer(), false, "no timer while nothing is pending");
+});
+
+test("the retransmit timer restarts when a new update is enqueued after drain", () => {
+  const h = harness();
+  h.rs.onConnect();
+  h.rs.enqueue(u(1));
+  h.rs.onAck(1);
+  assert.equal(h.hasTimer(), false, "timer stopped after drain");
+
+  h.rs.enqueue(u(2));
+  assert.equal(h.hasTimer(), true, "timer restarted for the new pending update");
+});
+
+test("destroy while connected stops the timer and ignores further enqueues", () => {
+  const h = harness();
+  h.rs.onConnect();
+  h.rs.enqueue(u(1));
+  assert.equal(h.hasTimer(), true);
+
+  h.rs.destroy();
+  assert.equal(h.hasTimer(), false, "timer stopped on destroy");
+  assert.equal(h.rs.hasPending, false, "queue cleared on destroy");
+
+  h.rs.enqueue(u(2));
+  assert.equal(h.sent.length, 1, "no sends after destroy");
+  h.tick();
+  assert.equal(h.sent.length, 1, "no retransmits after destroy");
+});
+
+test("resendInterval is forwarded to setInterval", () => {
+  const h = harness({ resendInterval: 2500 });
+  h.rs.onConnect();
+  h.rs.enqueue(u(1));
+  assert.equal(h.intervalMs(), 2500);
 });
