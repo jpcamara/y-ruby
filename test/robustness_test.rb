@@ -30,7 +30,6 @@ class RobustnessTest < Minitest::Test
     garbage_corpus.each do |bytes|
       doc = YrbLite::Doc.new
       safe { doc.apply_update(bytes) }
-      safe { doc.sync_step2(bytes) }
       safe { doc.handle_sync_message(bytes) }
     end
     # Reaching here means nothing crashed the process; the runtime still works.

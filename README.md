@@ -86,11 +86,7 @@ require "yrb_lite"
 
 # Create docs
 doc = YrbLite::Doc.new        # random client ID
-doc = YrbLite::Doc.new(12345) # specific client ID
-
-# Get document info
-doc.client_id  # => unique client identifier
-doc.guid       # => document GUID
+doc = YrbLite::Doc.new(12345) # specific client ID (used for CRDT identity)
 
 # Encoding
 doc.encode_state_vector           # => current state vector
@@ -100,10 +96,10 @@ doc.encode_state_as_update(sv)    # => update diff against state vector
 # Applying updates
 doc.apply_update(update_bytes)    # apply raw V1 update
 
-# Sync protocol messages
-doc.sync_step1                    # => SyncStep1 message (contains state vector)
-doc.sync_step2(state_vector)      # => SyncStep2 message (contains update)
-doc.handle_sync_message(data)     # => [msg_type, sync_type, response]
+# Sync protocol
+doc.sync_step1                    # => SyncStep1 message (this doc's state vector)
+doc.handle_sync_message(data)     # => [msg_type, sync_type, response]; answers a
+                                  #    peer's SyncStep1 with a SyncStep2
 ```
 
 ### Protocol codec (module functions)

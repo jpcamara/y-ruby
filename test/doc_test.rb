@@ -10,34 +10,11 @@ class DocTest < Minitest::Test
     assert_instance_of YrbLite::Doc, doc
   end
 
-  def test_doc_with_client_id
-    doc = YrbLite::Doc.new(12_345)
-
-    assert_equal 12_345, doc.client_id
-  end
-
-  def test_doc_has_random_client_id
-    doc = YrbLite::Doc.new
-
-    assert_kind_of Integer, doc.client_id
-    assert_predicate doc.client_id, :positive?
-  end
-
-  def test_doc_accepts_max_safe_client_id
-    # Client IDs are not validated here -- a JS-safe integer (<= 2^53 - 1) round-
-    # trips intact; keeping ids in range is the caller's responsibility (a larger
-    # value is silently masked by yrs). See protocol.rs for the rationale.
-    max_safe = (2**53) - 1
-
-    assert_equal max_safe, YrbLite::Doc.new(max_safe).client_id
-  end
-
-  def test_doc_has_guid
-    doc = YrbLite::Doc.new
-    guid = doc.guid
-
-    assert_kind_of String, guid
-    refute_empty guid
+  def test_doc_accepts_a_client_id_without_validation
+    # A client_id can be supplied for CRDT identity, but it is not validated and
+    # not readable back -- keeping it JS-safe is the caller's job (an out-of-range
+    # value is silently masked by yrs, not rejected). See protocol.rs.
+    assert_instance_of YrbLite::Doc, YrbLite::Doc.new((2**53) - 1)
   end
 
   def test_encode_state_vector
@@ -70,15 +47,6 @@ class DocTest < Minitest::Test
 
     assert_kind_of String, step1
     refute_empty step1
-  end
-
-  def test_sync_step2
-    doc = YrbLite::Doc.new
-    sv = doc.encode_state_vector
-    step2 = doc.sync_step2(sv)
-
-    assert_kind_of String, step2
-    refute_empty step2
   end
 
   def test_handle_sync_message_step1

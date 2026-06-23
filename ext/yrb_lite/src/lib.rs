@@ -134,14 +134,6 @@ impl RbDoc {
         Ok(RbDoc(doc))
     }
 
-    fn client_id(&self) -> u64 {
-        self.0.client_id().get()
-    }
-
-    fn guid(&self) -> String {
-        self.0.guid().to_string()
-    }
-
     fn encode_state_vector(&self) -> RString {
         let doc = &self.0;
         let sv = nogvl(move || {
@@ -210,20 +202,6 @@ impl RbDoc {
             Message::Sync(SyncMessage::SyncStep1(sv)).encode_v1()
         });
         binary_string(&encoded)
-    }
-
-    /// Sync step 2: Create a sync message with updates for the given state vector
-    fn sync_step2(&self, sv_bytes: RString) -> Result<RString, Error> {
-        let sv_data = copy_bytes(sv_bytes);
-        let doc = &self.0;
-        let encoded = nogvl(move || -> Result<Vec<u8>, String> {
-            let sv = yrs::StateVector::decode_v1(&sv_data).map_err(|e| e.to_string())?;
-            let txn = doc.transact();
-            let update = txn.encode_state_as_update_v1(&sv);
-            Ok(Message::Sync(SyncMessage::SyncStep2(update)).encode_v1())
-        })
-        .map_err(yrb_error)?;
-        Ok(binary_string(&encoded))
     }
 
     /// Handle a sync message and return response (if any)
@@ -329,8 +307,6 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     // Define Doc class
     let doc_class = module.define_class("Doc", ruby.class_object())?;
     doc_class.define_singleton_method("new", function!(RbDoc::new, -1))?;
-    doc_class.define_method("client_id", method!(RbDoc::client_id, 0))?;
-    doc_class.define_method("guid", method!(RbDoc::guid, 0))?;
     doc_class.define_method(
         "encode_state_vector",
         method!(RbDoc::encode_state_vector, 0),
@@ -343,7 +319,6 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     doc_class.define_method("update_ready?", method!(RbDoc::update_ready, 1))?;
     doc_class.define_method("update_advances?", method!(RbDoc::update_advances, 1))?;
     doc_class.define_method("sync_step1", method!(RbDoc::sync_step1, 0))?;
-    doc_class.define_method("sync_step2", method!(RbDoc::sync_step2, 1))?;
     doc_class.define_method(
         "handle_sync_message",
         method!(RbDoc::handle_sync_message, 1),
