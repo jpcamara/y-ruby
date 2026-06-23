@@ -49,4 +49,18 @@ module YjsFixtures
     U2 = YjsFixtures.b64("AQGCno+7CAGEgp6PuwgAAUIA")
     U3 = YjsFixtures.b64("AQGCno+7CAKEgp6PuwgBAUMA")
   end
+
+  # Fixture 6: five independent, from-scratch updates from distinct clients
+  # (1..5). No cross-dependencies, so any receive order integrates; applying all
+  # five converges to a state vector covering all five clients. Used by the
+  # store-backed concurrency specs.
+  module ConcurrentClients
+    FIVE = [
+      YjsFixtures.b64("AQEBAAQBB2NvbnRlbnQQY2xpZW50LTEtY29udGVudAA="),
+      YjsFixtures.b64("AQECAAQBB2NvbnRlbnQQY2xpZW50LTItY29udGVudAA="),
+      YjsFixtures.b64("AQEDAAQBB2NvbnRlbnQQY2xpZW50LTMtY29udGVudAA="),
+      YjsFixtures.b64("AQEEAAQBB2NvbnRlbnQQY2xpZW50LTQtY29udGVudAA="),
+      YjsFixtures.b64("AQEFAAQBB2NvbnRlbnQQY2xpZW50LTUtY29udGVudAA=")
+    ].freeze
+  end
 end

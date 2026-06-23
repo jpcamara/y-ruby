@@ -303,4 +303,72 @@ class SyncTest < Minitest::Test
     assert_equal 1, broadcasts.length
     assert_equal [5, 5], acks_in(transmits)
   end
+
+  # -- Store-backed concurrency -------------------------------------------
+  #
+  # The store path serializes record -> apply -> distribute per document with
+  # `Sync.lock_for(key)`, and checks `update_advances?` INSIDE that lock so a
+  # concurrent retry can't double-record. These run real MRI threads contending
+  # on a single document key. `flags[:overlapped]` trips if the per-document
+  # lock ever lets two recorders run at once.
+  def overlap_tracking_recorder(store, flags)
+    mutex = Mutex.new
+    lambda do |_key, update|
+      flags[:overlapped] = true if flags[:busy]
+      flags[:busy] = true
+      mutex.synchronize { store << update }
+      Thread.pass # widen the window so a broken lock would overlap
+      flags[:busy] = false
+    end
+  end
+
+  def test_store_concurrent_duplicate_retries_record_exactly_once
+    YrbLite::ActionCable::Sync.reset!
+    key = "store-retry-#{object_id}"
+    store = []
+    flags = { busy: false, overlapped: false }
+    recorder = overlap_tracking_recorder(store, flags)
+    msg = update_message(YjsFixtures::ConcurrentClients::FIVE.first)
+
+    32.times.map { Thread.new { helper_for(store: store, recorder: recorder).sync_receive(msg, key) } }
+            .each(&:join)
+
+    refute flags[:overlapped], "the per-document recorder must never run concurrently"
+    assert_equal 1, store.length, "32 concurrent retries of the same update record exactly once"
+  end
+
+  def test_store_concurrent_distinct_and_duplicate_receives_serialize_and_converge
+    YrbLite::ActionCable::Sync.reset!
+    key = "store-mix-#{object_id}"
+    store = []
+    flags = { busy: false, overlapped: false }
+    recorder = overlap_tracking_recorder(store, flags)
+    five = YjsFixtures::ConcurrentClients::FIVE
+
+    # 5 distinct updates, each delivered by 5 threads (25 total) -> 20 retries.
+    25.times.map do |i|
+      msg = update_message(five[i % five.length])
+      Thread.new { helper_for(store: store, recorder: recorder).sync_receive(msg, key) }
+    end.each(&:join)
+
+    refute flags[:overlapped], "the per-document recorder must never run concurrently"
+    assert_equal five.length, store.length,
+                 "each of the 5 distinct changes is recorded exactly once under concurrency"
+
+    rebuilt = YrbLite::Doc.new
+    store.each { |u| rebuilt.apply_update(u) }
+    expected = YrbLite::Doc.new
+    five.each { |u| expected.apply_update(u) }
+
+    assert_equal expected.encode_state_vector, rebuilt.encode_state_vector,
+                 "the recorded log converges to all five clients"
+  end
+
+  def test_lock_for_returns_one_mutex_per_key_under_contention
+    YrbLite::ActionCable::Sync.reset!
+    locks = 16.times.map { Thread.new { YrbLite::ActionCable::Sync.lock_for("contended") } }.map(&:value)
+
+    assert_equal 1, locks.uniq(&:object_id).length,
+                 "lock_for must return one mutex per key, even under concurrent creation"
+  end
 end

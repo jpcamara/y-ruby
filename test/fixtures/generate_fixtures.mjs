@@ -103,3 +103,18 @@ console.log("")
   console.log(`EMPTY_SV = "${toBase64(sv)}"`)
   console.log(`EMPTY_UPDATE = "${toBase64(update)}"`)
 }
+
+// Fixture 5: Five independent, from-scratch updates from distinct client ids
+// (1..5), each a different content insert. Applying all five in any order
+// converges to a doc whose state vector covers all five clients. Used by the
+// store-backed concurrency specs.
+{
+  console.log("")
+  console.log("# Fixture 6: Five independent updates (distinct clients 1..5)")
+  for (let c = 1; c <= 5; c++) {
+    const doc = new Y.Doc()
+    doc.clientID = c
+    doc.getText('content').insert(0, `client-${c}-content`)
+    console.log(`CLIENT_${c}_UPDATE = "${toBase64(Y.encodeStateAsUpdate(doc))}"`)
+  }
+}
