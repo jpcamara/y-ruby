@@ -191,6 +191,15 @@ servers:
   will be retried forever, since nothing tells the client to stop. Enforce hard
   rejections before the edit reaches `on_change` (channel authorization in
   `subscribed`), not by raising inside it.
+- **An over-cap frame is dropped the same silent way.** A frame larger than
+  `max_frame_bytes` (default 8 MiB) is dropped before decoding — no ack, no
+  broadcast — to bound the work a client can force. For a genuine document
+  update that means the same implicit rejection as above: unacked, retransmitted
+  forever. Normal typing never approaches the cap, but a large paste, an embedded
+  image, or a big initial `SyncStep2` can. The drop is logged (`warn` for
+  over-cap, `debug` for undecodable) so it's findable; size the cap for your
+  largest expected payload, and reject genuinely-too-big content upstream rather
+  than relying on the cap to reject it gracefully.
 
 There is deliberately no in-gem cross-process lock. One that only spanned a
 single process would give exactly-once at small scale and silently degrade as

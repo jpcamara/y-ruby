@@ -132,17 +132,26 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
 
       # Frame-size cap: drop oversized frames before decoding (the encoded form
       # is ~4/3 the decoded size) and again after, so a client can't force large
-      # base64 decodes / native parses / merges. A dropped frame is never acked.
+      # base64 decodes / native parses / merges. A dropped frame is never acked,
+      # and there is no protocol NACK, so a legitimate oversized update is
+      # retransmitted indefinitely -- log the drop so it is at least findable.
       cap = self.class.max_frame_bytes
-      return if cap && encoded.bytesize > (cap * 4 / 3) + 4
+      if cap && encoded.bytesize > (cap * 4 / 3) + 4
+        sync_log_drop(:warn, "encoded #{encoded.bytesize}B exceeds max_frame_bytes #{cap}B")
+        return
+      end
 
       begin
         bytes = Base64.strict_decode64(encoded)
       rescue ArgumentError
-        return # not valid base64; ignore the frame and keep the connection
+        sync_log_drop(:debug, "not valid base64") # garbage or a probe, rarely a real client
+        return # ignore the frame and keep the connection
       end
 
-      return if cap && bytes.bytesize > cap
+      if cap && bytes.bytesize > cap
+        sync_log_drop(:warn, "decoded #{bytes.bytesize}B exceeds max_frame_bytes #{cap}B")
+        return
+      end
 
       sync_send_ack(id, sync_handle_frame(encoded, bytes))
     end
@@ -195,6 +204,16 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
 
     def sync_envelope(encoded, extra = {})
       { "update" => encoded }.merge(extra)
+    end
+
+    # Surface a dropped frame through the channel logger when one exists. Drops
+    # are otherwise invisible (no ack, no broadcast); an oversized legitimate
+    # update is never acked and the client retransmits it forever, so make it
+    # findable. Guarded so the concern works when mixed into a logger-less host.
+    def sync_log_drop(level, reason)
+      return unless respond_to?(:logger) && logger
+
+      logger.public_send(level) { "[yrb-lite] dropped frame: #{reason}" }
     end
 
     # This concern acks updates as *durably recorded*, so it MUST have both a

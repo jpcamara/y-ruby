@@ -301,6 +301,32 @@ class SyncTest < Minitest::Test
     assert_empty acks_in(helper.transmits)
   end
 
+  def test_dropped_frames_are_logged
+    logged = []
+    logger = Object.new
+    %i[warn debug info].each do |level|
+      logger.define_singleton_method(level) { |*args, &blk| logged << [level, blk ? blk.call : args.first] }
+    end
+
+    helper = helper_for
+    helper.define_singleton_method(:logger) { logger }
+
+    # Oversized: logged at warn, naming the cap so it is searchable.
+    helper.class.max_frame_bytes 4
+    helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE, id: 2), "doc-key")
+
+    assert(logged.any? { |lvl, msg| lvl == :warn && msg.include?("max_frame_bytes") },
+           "an oversized frame is logged at warn")
+    assert_empty acks_in(helper.transmits), "a dropped frame is still never acked"
+
+    # Invalid base64 (cap disabled so the size check can't fire first): logged at debug.
+    logged.clear
+    helper.class.max_frame_bytes nil
+    helper.sync_receive({ "update" => "@@@bad", "id" => 3 }, "doc-key")
+
+    assert(logged.any? { |lvl, _| lvl == :debug }, "an invalid-base64 frame is logged at debug")
+  end
+
   def test_lost_ack_retry_acks_without_double_recording
     store = []
     broadcasts = []
