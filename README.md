@@ -161,6 +161,32 @@ oversized, or unknown frames are dropped. A bad frame can't crash the process: a
 Rust panic is caught at the FFI boundary and re-raised as a Ruby exception. And
 no single client can relay garbage that breaks the others in a room.
 
+#### Delivery guarantees
+
+The contract is the same at every scale — one process, or hundreds across many
+servers:
+
+- **The document always converges.** CRDT updates are commutative and
+  idempotent, so out-of-order, duplicate, or concurrent delivery all converge to
+  the same correct document. This needs no coordination and holds everywhere.
+- **The durable log never goes gappy.** An update is recorded only once its
+  causal dependencies are already in the store (checked against `on_load`); a
+  causally-incomplete update triggers a resync instead, so the log always
+  rebuilds cleanly.
+- **`on_change` is at-least-once.** Every change is recorded durably before it's
+  acked or broadcast (record-before-distribute). A best-effort check skips the
+  common lost-ack retry, but it is **not** cross-process exactly-once: a retry
+  that lands on another process before the first one commits can record the same
+  update twice. **Make `on_change` idempotent** if duplicate side effects would
+  matter (a webhook, a counter) — a raw append-only delta log is naturally fine,
+  since duplicate entries replay idempotently.
+
+There is deliberately no in-gem cross-process lock. One that only spanned a
+single process would give exactly-once at small scale and silently degrade as
+you scale out, so the guarantee is uniform instead. If you need exactly-once
+*side effects*, enforce it in your store (a unique key on the update) or with
+your own distributed lock — the gem stays storage-agnostic and assumes neither.
+
 #### Multi-process deployments
 
 Most Rails apps run several processes (Puma workers, multiple dynos), and any of

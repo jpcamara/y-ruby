@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The headless durability/concurrency slice the CI demo job runs against a
-# already-booted server (see boot_server.sh). Kept as one list so the Puma and
-# Falcon runs exercise exactly the same scenarios — no drift between modes.
+# already-booted server (see boot_server.sh). One list, so the Puma and Falcon
+# runs exercise exactly the same scenarios — no drift between modes.
 #
 # These drive the yrb-lite native extension through the full ActionCable /
 # yrb-lite-actioncable / store path: record-before-distribute, exactly-once

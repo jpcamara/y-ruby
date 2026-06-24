@@ -53,7 +53,7 @@ pub(crate) fn merged_doc_update(bytes: &[u8]) -> Result<Option<Vec<u8>>, String>
     let update = yrs::Update::decode_v1(&merged).map_err(|e| e.to_string())?;
     // A genuine no-op (e.g. the empty SyncStep2 in an opening handshake) carries
     // no structs, no deletes, and no dependencies. We must NOT treat a causally-
-    // pending update as a no-op: since yrs 0.26 such an update reports an empty
+    // pending update as a no-op: such an update reports an empty
     // state_vector (its structs can't integrate yet), but it still carries
     // content and a non-empty lower bound (the deps it's waiting on). Dropping it
     // here would silently swallow a gappy update instead of rejecting + resyncing.

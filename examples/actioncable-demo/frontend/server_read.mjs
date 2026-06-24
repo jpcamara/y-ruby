@@ -2,8 +2,7 @@
 //
 // /docs/:id/content returns the raw CRDT state as { state: "<base64>" } (the
 // base64 of encodeStateAsUpdate). Apply it to a fresh Y.Doc to see exactly what
-// the server holds. (The gem no longer extracts ProseMirror JSON server-side;
-// decoding the CRDT client-side is the equivalent read.)
+// the server holds.
 import * as Y from "yjs"
 
 // Fetch the server's state for a room. Returns { status, doc } where doc is a
