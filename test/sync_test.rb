@@ -313,20 +313,26 @@ class SyncTest < Minitest::Test
     helper = helper_for
     helper.logger = logger
 
-    # Oversized: logged at warn, naming the cap so it is searchable.
+    # Oversized: logged at warn, naming the cap, the document key, and the
+    # reliable-delivery id so the drop is traceable to a specific stuck update.
     helper.class.max_frame_bytes 4
     helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE, id: 2), "doc-key")
 
-    assert(logged.any? { |lvl, msg| lvl == :warn && msg.include?("max_frame_bytes") },
-           "an oversized frame is logged at warn")
+    warned = logged.any? do |lvl, msg|
+      lvl == :warn && msg.include?("max_frame_bytes") && msg.include?("doc-key") && msg.include?("id=2")
+    end
+
+    assert(warned, "an oversized frame is logged at warn, naming the document and update")
     assert_empty acks_in(helper.transmits), "a dropped frame is still never acked"
 
-    # Invalid base64 (cap disabled so the size check can't fire first): logged at debug.
+    # Invalid base64 (cap disabled so the size check can't fire first): logged at
+    # debug, still naming the document.
     logged.clear
     helper.class.max_frame_bytes nil
     helper.sync_receive({ "update" => "@@@bad", "id" => 3 }, "doc-key")
 
-    assert(logged.any? { |lvl, _| lvl == :debug }, "an invalid-base64 frame is logged at debug")
+    assert(logged.any? { |lvl, msg| lvl == :debug && msg.include?("doc-key") },
+           "an invalid-base64 frame is logged at debug, naming the document")
   end
 
   def test_lost_ack_retry_acks_without_double_recording

@@ -137,19 +137,19 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       # retransmitted indefinitely -- log the drop so it is at least findable.
       cap = self.class.max_frame_bytes
       if cap && encoded.bytesize > (cap * 4 / 3) + 4
-        sync_log_drop(:warn, "encoded #{encoded.bytesize}B exceeds max_frame_bytes #{cap}B")
+        sync_log_drop(:warn, "encoded #{encoded.bytesize}B exceeds max_frame_bytes #{cap}B", id)
         return
       end
 
       begin
         bytes = Base64.strict_decode64(encoded)
       rescue ArgumentError
-        sync_log_drop(:debug, "not valid base64") # garbage or a probe, rarely a real client
+        sync_log_drop(:debug, "not valid base64", id) # garbage or a probe, rarely a real client
         return # ignore the frame and keep the connection
       end
 
       if cap && bytes.bytesize > cap
-        sync_log_drop(:warn, "decoded #{bytes.bytesize}B exceeds max_frame_bytes #{cap}B")
+        sync_log_drop(:warn, "decoded #{bytes.bytesize}B exceeds max_frame_bytes #{cap}B", id)
         return
       end
 
@@ -208,9 +208,14 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
 
     # Surface a dropped frame through the channel logger. Drops are otherwise
     # invisible (no ack, no broadcast); an oversized legitimate update is never
-    # acked and the client retransmits it forever, so make it findable.
-    def sync_log_drop(level, reason)
-      logger.public_send(level) { "[yrb-lite] dropped frame: #{reason}" }
+    # acked and the client retransmits it forever, so make it findable. Names the
+    # document key and the reliable-delivery id when present, so a drop can be
+    # tied to a specific document and a specific retransmitting update.
+    def sync_log_drop(level, reason, id = nil)
+      logger.public_send(level) do
+        suffix = id.nil? ? "" : " id=#{id}"
+        "[yrb-lite] dropped frame (key=#{@sync_key.inspect}#{suffix}): #{reason}"
+      end
     end
 
     # This concern acks updates as *durably recorded*, so it MUST have both a
