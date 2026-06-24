@@ -206,13 +206,10 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       { "update" => encoded }.merge(extra)
     end
 
-    # Surface a dropped frame through the channel logger when one exists. Drops
-    # are otherwise invisible (no ack, no broadcast); an oversized legitimate
-    # update is never acked and the client retransmits it forever, so make it
-    # findable. Guarded so the concern works when mixed into a logger-less host.
+    # Surface a dropped frame through the channel logger. Drops are otherwise
+    # invisible (no ack, no broadcast); an oversized legitimate update is never
+    # acked and the client retransmits it forever, so make it findable.
     def sync_log_drop(level, reason)
-      return unless respond_to?(:logger) && logger
-
       logger.public_send(level) { "[yrb-lite] dropped frame: #{reason}" }
     end
 

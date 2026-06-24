@@ -3,6 +3,7 @@
 require "test_helper"
 require_relative "fixtures/yjs_fixtures"
 require "yrb_lite/action_cable"
+require "logger"
 
 class SyncTest < Minitest::Test
   def update_message(update_bytes, id: nil)
@@ -27,7 +28,7 @@ class SyncTest < Minitest::Test
     klass = Class.new do
       include YrbLite::ActionCable::Sync
 
-      attr_accessor :transmits, :broadcasts, :streams
+      attr_accessor :transmits, :broadcasts, :streams, :logger
 
       def transmit(data) = transmits << data
 
@@ -43,6 +44,7 @@ class SyncTest < Minitest::Test
     helper.transmits = transmits
     helper.broadcasts = broadcasts
     helper.streams = []
+    helper.logger = Logger.new(File::NULL) # a real channel always has one; discard by default
     helper
   end
 
@@ -309,7 +311,7 @@ class SyncTest < Minitest::Test
     end
 
     helper = helper_for
-    helper.define_singleton_method(:logger) { logger }
+    helper.logger = logger
 
     # Oversized: logged at warn, naming the cap so it is searchable.
     helper.class.max_frame_bytes 4
