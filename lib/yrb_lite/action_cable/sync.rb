@@ -236,24 +236,24 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
         update = YrbLite.update_from_message(bytes)
         return :noop unless update
 
-        Sync.lock_for(@sync_key).synchronize do
-          # To tell whether this update is causally ready we rebuild the doc
-          # from the store and check against it. That's an O(history) load per
-          # update, mitigated by snapshotting in the app's load path if needed.
-          doc = sync_load_doc
-          unless doc.update_ready?(update)
-            sync_request_resync(doc)
-            next :gap
-          end
+        # Rebuild from the store (O(history) per update; snapshot in on_load if
+        # that cost bites).
+        doc = sync_load_doc
 
-          # Lost-ack retry: the durable store already contains this update.
-          # Ack it without recording or relaying again.
-          next :applied unless doc.update_advances?(update)
-
-          sync_record_change(self.class.on_change, update) # record before relay
-          sync_distribute(encoded)
-          :recorded
+        # Don't record a causally-incomplete update; resync instead so the gap
+        # heals as one complete delta.
+        unless doc.update_ready?(update)
+          sync_request_resync(doc)
+          return :gap
         end
+
+        # Skip a lost-ack retry the store already has. Best-effort, not
+        # cross-process exactly-once (see "Delivery guarantees" in the README).
+        return :applied unless doc.update_advances?(update)
+
+        sync_record_change(self.class.on_change, update) # record before relay
+        sync_distribute(encoded)
+        :recorded
       when MSG_KIND_AWARENESS
         sync_distribute(encoded)
         :noop
@@ -287,28 +287,12 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
 
     # -- Shared process state ----------------------------------------------
 
-    @locks = {}
-    @registry_mutex = Mutex.new
-
     class << self
       # A stable id for this server process, stamped on every broadcast so
       # other processes know to apply it to their replica and this process
       # knows to skip its own. Survives for the life of the process.
       def process_id
         @process_id ||= SecureRandom.hex(8)
-      end
-
-      # Per-document mutex serializing load -> record -> broadcast within this
-      # process. The durable store remains the cross-process source of truth.
-      # Only briefly holds the registry mutex to fetch/create the lock; the
-      # durable write itself runs while holding only this per-key lock.
-      def lock_for(key)
-        @registry_mutex.synchronize { @locks[key] ||= Mutex.new }
-      end
-
-      # Clear process-local locks (useful for testing).
-      def reset!
-        @registry_mutex.synchronize { @locks = {} }
       end
     end
   end
