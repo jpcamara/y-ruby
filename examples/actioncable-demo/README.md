@@ -46,7 +46,6 @@ class DocumentChannel < ApplicationCable::Channel
 
   def subscribed = sync_subscribed(params[:id])
   def receive(data) = sync_receive(data, params[:id])
-  def unsubscribed = sync_unsubscribed(params[:id])
 end
 ```
 

@@ -303,15 +303,19 @@ class SyncTest < Minitest::Test
     assert_empty acks_in(helper.transmits)
   end
 
+  # A logger that captures [level, message] pairs, resolving the lazy block form.
+  def capturing_logger(sink)
+    Object.new.tap do |logger|
+      %i[warn debug info error].each do |level|
+        logger.define_singleton_method(level) { |*args, &blk| sink << [level, blk ? blk.call : args.first] }
+      end
+    end
+  end
+
   def test_dropped_frames_are_logged
     logged = []
-    logger = Object.new
-    %i[warn debug info].each do |level|
-      logger.define_singleton_method(level) { |*args, &blk| logged << [level, blk ? blk.call : args.first] }
-    end
-
     helper = helper_for
-    helper.logger = logger
+    helper.logger = capturing_logger(logged)
 
     # Oversized: logged at warn, naming the cap, the document key, and the
     # reliable-delivery id so the drop is traceable to a specific stuck update.
@@ -333,6 +337,32 @@ class SyncTest < Minitest::Test
 
     assert(logged.any? { |lvl, msg| lvl == :debug && msg.include?("doc-key") },
            "an invalid-base64 frame is logged at debug, naming the document")
+  end
+
+  def test_drop_log_includes_sync_log_context
+    logged = []
+    helper = helper_for
+    helper.logger = capturing_logger(logged)
+    helper.define_singleton_method(:sync_log_context) { "user=42" }
+
+    helper.class.max_frame_bytes 4
+    helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE, id: 1), "doc-key")
+
+    assert(logged.any? { |_lvl, msg| msg.include?("user=42") },
+           "sync_log_context is appended to the drop log")
+  end
+
+  def test_drop_log_survives_a_raising_sync_log_context
+    logged = []
+    helper = helper_for
+    helper.logger = capturing_logger(logged)
+    helper.define_singleton_method(:sync_log_context) { raise "boom" }
+
+    helper.class.max_frame_bytes 4
+    # A broken context hook must not take down frame handling.
+    assert_nil helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE, id: 1), "doc-key")
+    assert(logged.any? { |_lvl, msg| msg.include?("log-context-error=RuntimeError") },
+           "a raising context hook surfaces in the log instead of breaking the drop")
   end
 
   def test_lost_ack_retry_acks_without_double_recording

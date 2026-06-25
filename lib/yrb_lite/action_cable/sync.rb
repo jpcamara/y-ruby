@@ -20,8 +20,8 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   #     include YrbLite::ActionCable::Sync
   #
   #     on_load { |key| Document.find_by(key: key)&.content }
-  #     # on_change blocks run in the channel instance's context, so instance
-  #     # methods (current_user, params, ...) are available without plumbing:
+  #     # on_change runs in the channel instance's context, so instance methods
+  #     # (current_user, params, ...) are available:
   #     on_change { |key, update| Document.record!(key, update, by: current_user) }
   #
   #     def subscribed
@@ -31,11 +31,10 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   #     def receive(data)
   #       sync_receive(data)
   #     end
-  #
-  #     def unsubscribed
-  #       sync_unsubscribed
-  #     end
   #   end
+  #
+  # There is no unsubscribe hook: the server keeps no per-connection document or
+  # presence state, so a disconnect needs no server-side cleanup.
   #
   # The concern is store-backed and fail-closed: every document update is
   # validated against `on_load`, recorded through `on_change`, then broadcast.
@@ -156,12 +155,6 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       sync_send_ack(id, sync_handle_frame(encoded, bytes))
     end
 
-    # The `unsubscribed` hook target. Nothing to clean up: the server keeps no
-    # per-connection document or presence state.
-    def sync_unsubscribed(key = nil)
-      @sync_key = key.to_s if key
-    end
-
     private
 
     # Ask this connection's client to resync: re-send SyncStep1 carrying the
@@ -206,15 +199,31 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       { "update" => encoded }.merge(extra)
     end
 
+    # Override in the channel to add identifying context to dropped-frame logs --
+    # a user id, a connection id, a request id. Return a short string (or nil for
+    # none); it is appended to the log line. Default: no extra context.
+    def sync_log_context
+      nil
+    end
+
     # Surface a dropped frame through the channel logger. Drops are otherwise
     # invisible (no ack, no broadcast); an oversized legitimate update is never
     # acked and the client retransmits it forever, so make it findable. Names the
-    # document key and the reliable-delivery id when present, so a drop can be
-    # tied to a specific document and a specific retransmitting update.
+    # document key, the reliable-delivery id when present, and whatever
+    # sync_log_context returns, so a drop can be tied to a specific document,
+    # update, and connection.
     def sync_log_drop(level, reason, id = nil)
       logger.public_send(level) do
-        suffix = id.nil? ? "" : " id=#{id}"
-        "[yrb-lite] dropped frame (key=#{@sync_key.inspect}#{suffix}): #{reason}"
+        parts = ["key=#{@sync_key.inspect}"]
+        parts << "id=#{id}" unless id.nil?
+        # A broken context hook must surface, not take down frame handling.
+        context = begin
+          sync_log_context
+        rescue StandardError => e
+          "log-context-error=#{e.class}"
+        end
+        parts << context if context
+        "[yrb-lite] dropped frame (#{parts.join(" ")}): #{reason}"
       end
     end
 

@@ -13,7 +13,6 @@ class DocumentChannel < ApplicationCable::Channel
 
   def subscribed   = sync_subscribed(params[:id])
   def receive(data) = sync_receive(data)
-  def unsubscribed = sync_unsubscribed(params[:id])
 end
 ```
 
@@ -136,10 +135,6 @@ class DocumentChannel < ApplicationCable::Channel
   def receive(data)
     sync_receive(data, params[:id])
   end
-
-  def unsubscribed
-    sync_unsubscribed(params[:id])
-  end
 end
 ```
 
@@ -197,9 +192,11 @@ servers:
   update that means the same implicit rejection as above: unacked, retransmitted
   forever. Normal typing never approaches the cap, but a large paste, an embedded
   image, or a big initial `SyncStep2` can. The drop is logged (`warn` for
-  over-cap, `debug` for undecodable) so it's findable; size the cap for your
-  largest expected payload, and reject genuinely-too-big content upstream rather
-  than relying on the cap to reject it gracefully.
+  over-cap, `debug` for undecodable) with the document key and update id so it's
+  findable; override `sync_log_context` on the channel to add a user/connection
+  id. Size the cap for your largest expected payload, and reject
+  genuinely-too-big content upstream rather than relying on the cap to reject it
+  gracefully.
 
 There is deliberately no in-gem cross-process lock. One that only spanned a
 single process would give exactly-once at small scale and silently degrade as
@@ -235,7 +232,6 @@ class DocumentChannel < ApplicationCable::Channel
 
   def subscribed   = sync_subscribed(params[:id])
   def receive(data) = sync_receive(data, params[:id])   # pass the key each call
-  def unsubscribed = sync_unsubscribed(params[:id])
 end
 ```
 
@@ -247,8 +243,8 @@ end
   separate awareness stream with AnyCable `whisper: true`, so cursor traffic can
   take the low-latency client-to-client path without bypassing document
   durability.
-- Pass `params[:id]` into `sync_receive`/`sync_unsubscribed` so the document key
-  survives AnyCable's per-command instances.
+- Pass `params[:id]` into `sync_receive` so the document key survives AnyCable's
+  per-command instances.
 - The sender gets its own updates echoed back (no Ruby callback to filter them).
   That's a no-op, since applying an update twice does nothing.
 
@@ -287,7 +283,6 @@ class DocumentChannel < ApplicationCable::Channel
 
   def subscribed = sync_subscribed(params[:id])
   def receive(data) = sync_receive(data, params[:id])
-  def unsubscribed = sync_unsubscribed(params[:id])
 end
 ```
 
