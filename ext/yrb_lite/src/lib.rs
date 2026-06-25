@@ -43,6 +43,10 @@ fn assert_thread_safe() {
 ///   waiting on the lock while holding the GVL can deadlock against the GVL
 ///   reacquire. Same reason we never hold a lock across the GVL boundary.
 ///
+/// The closure runs with no unblock function, so it is not interruptible: a
+/// Thread#kill, timeout, or signal can't preempt it mid-run. That's fine for the
+/// bounded CRDT work it does; never call anything blocking or unbounded inside it.
+///
 /// Panics inside the closure are caught and re-raised (resumed) after the GVL
 /// is reacquired, where magnus converts them to Ruby exceptions.
 fn nogvl<F, R>(f: F) -> R
