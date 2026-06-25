@@ -34,6 +34,22 @@ What it doesn't do: auth, read-only connections, rate limiting, webhooks,
 metrics. Hocuspocus ships extensions for those; here you'd build them with
 Rails.
 
+## Why "lite"
+
+The "lite" is the size of the surface. yrb-lite binds just the part of y-crdt you
+need to *sync and persist* collaborative documents — a `Doc`, awareness, and the
+y-websocket protocol primitives. The Ruby side treats a document as opaque CRDT
+state: it applies updates, answers sync handshakes, and records deltas, but never
+reaches in to read or edit the contents. The browser editor owns the document's
+shape; Rails owns durability and delivery.
+
+A full y-crdt Ruby binding like `y-rb` gives you the whole type system — shared
+text, arrays, maps, XML — to build and query documents in Ruby. yrb-lite leaves
+that out on purpose. What's left is a sync engine plus a one-include ActionCable
+concern, with the server concerns it skips (auth, rate limiting, metrics — see
+above) built from the Rails you already run, and no Node process hosting the
+documents.
+
 ## Testing
 
 Ruby and Rust unit tests cover the core. CI also runs the npm client tests and a
