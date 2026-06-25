@@ -39,7 +39,7 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
   # validated against `on_load`, recorded through `on_change`, then broadcast.
   # No authoritative document state is kept in ActionCable process memory.
   module Sync
-    # Frame kinds we act on, from Awareness#message_kind. The other codes it can
+    # Frame kinds we act on, from YrbLite.message_kind. The other codes it can
     # return -- 0 (drop: malformed/truncated/multi-message/unknown) and 4
     # (awareness query) -- fall through to a no-op in the dispatch below.
     MSG_KIND_SYNC_STEP1 = 1
@@ -125,7 +125,8 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       return unless encoded.is_a?(String)
 
       # Optional client-supplied id for reliable delivery (see sync_send_ack).
-      id = data.is_a?(Hash) ? data["id"] : nil
+      # data is known to be a Hash here (encoded came from it above).
+      id = data["id"]
 
       # Frame-size cap: drop oversized frames before decoding (the encoded form
       # is ~4/3 the decoded size) and again after, so a client can't force large
@@ -190,8 +191,8 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       transmit(sync_envelope(Base64.strict_encode64(bytes)))
     end
 
-    def sync_envelope(encoded, extra = {})
-      { "update" => encoded }.merge(extra)
+    def sync_envelope(encoded)
+      { "update" => encoded }
     end
 
     # Override in the channel to add identifying context to dropped-frame logs --
@@ -285,11 +286,11 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       end
     end
 
-    # Build a fresh document from the durable store (on_load).
+    # Build a fresh document from the durable store (on_load). Callers validate
+    # the hooks first, so on_load is present; a nil state means a fresh document.
     def sync_load_doc
       doc = YrbLite::Doc.new
-      loader = self.class.on_load
-      state = instance_exec(@sync_key, &loader) if loader
+      state = instance_exec(@sync_key, &self.class.on_load)
       doc.apply_update(state) if state
       doc
     end
