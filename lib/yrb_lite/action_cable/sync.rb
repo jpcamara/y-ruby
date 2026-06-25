@@ -254,7 +254,7 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
       case YrbLite.message_kind(bytes)
       when MSG_KIND_SYNC_STEP1
         result = sync_load_doc.handle_sync_message(bytes)
-        sync_transmit(result[2]) if result
+        sync_transmit(result[2])
         :noop
       when MSG_KIND_UPDATE
         update = YrbLite.update_from_message(bytes)

@@ -202,9 +202,10 @@ impl RbDoc {
         binary_string(&encoded)
     }
 
-    /// Handle a sync message and return response (if any)
-    /// Returns [message_type, sync_type, response_bytes] or nil
-    fn handle_sync_message(&self, data: RString) -> Result<Option<(u8, u8, RString)>, Error> {
+    /// Handle a Sync or Awareness message, returning
+    /// [message_type, sync_type, response_bytes]. Only Sync (step1/step2/update)
+    /// and Awareness are handled; any other frame type is rejected.
+    fn handle_sync_message(&self, data: RString) -> Result<(u8, u8, RString), Error> {
         let data_bytes = copy_bytes(data);
         let doc = &self.0;
 
@@ -239,14 +240,14 @@ impl RbDoc {
                         }
                     },
                     Message::Awareness(_) => Ok((1, 0, Vec::new())),
-                    Message::AwarenessQuery => Ok((3, 0, Vec::new())),
-                    Message::Auth(_) => Ok((2, 0, Vec::new())),
-                    Message::Custom(tag, _) => Ok((tag, 0, Vec::new())),
+                    // Auth, awareness-query, and custom frames aren't part of this
+                    // protocol; reject rather than pretend to handle them.
+                    _ => Err("unsupported message type".to_string()),
                 }
             })
             .map_err(yrb_error)?;
 
-        Ok(Some((msg_type, sync_type, binary_string(&response))))
+        Ok((msg_type, sync_type, binary_string(&response)))
     }
 }
 
