@@ -274,7 +274,7 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
         # cross-process exactly-once (see "Delivery guarantees" in the README).
         return :applied unless doc.update_advances?(update)
 
-        sync_record_change(self.class.on_change, update) # record before relay
+        sync_record_change(update) # record before relay
         sync_distribute(encoded)
         :recorded
       when MSG_KIND_AWARENESS
@@ -303,9 +303,10 @@ module YrbLite::ActionCable # rubocop:disable Style/ClassAndModuleChildren
     end
 
     # Invoke the on_change recorder in this channel instance's context
-    # (instance_exec) so it can reach the channel's own methods.
-    def sync_record_change(recorder, update)
-      instance_exec(@sync_key, update, &recorder)
+    # (instance_exec) so it can reach the channel's own methods. Mirrors how
+    # sync_load_doc fetches and runs on_load.
+    def sync_record_change(update)
+      instance_exec(@sync_key, update, &self.class.on_change)
     end
   end
 end
