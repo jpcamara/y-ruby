@@ -4,7 +4,7 @@
 //   1. Two providers sync documents + presence through the canonical yrb-lite
 //      envelopes.
 //   2. Reliability: a silently-lost client->server batch is recovered by the
-//      provider's own retransmit -- no reconnect, no follow-up edit -- and the
+//      provider's own retransmit, no reconnect, no follow-up edit, and the
 //      ack drains its pending queue.
 //
 //   bin/rails s -p 3777
@@ -12,7 +12,7 @@
 //
 // We hand the provider a minimal raw-WebSocket ActionCable consumer. The
 // consumer has a `blackhole` switch that drops outbound frames without tearing
-// down the socket -- a lost-in-transit network, not a disconnect -- so the
+// down the socket, a lost-in-transit network, not a disconnect, so the
 // provider keeps retransmitting on its timer.
 import * as Y from "yjs"
 import { ActionCableProvider } from "yrb-lite-client"
@@ -128,7 +128,7 @@ check("normal edit acked and propagated", text(doc2).includes("alpha") && !p1.ha
 
 // 2. Network blackhole: p1's next batch (and every retransmit) is dropped before
 //    reaching the server. Nothing else is sent, so the server stays idle and
-//    never asks anyone to resync -- a plain provider would lose this edit.
+//    never asks anyone to resync, a plain provider would lose this edit.
 c1.state.blackhole = true
 addParagraph(doc1, "beta-lost")
 

@@ -72,7 +72,7 @@ test("an ack drains the pending queue", () => {
 test("applyRemoteUpdate seeds the doc without re-sending it as a local edit", () => {
   const { doc, eng, sent } = engine();
 
-  // A bootstrap payload (e.g. initial state loaded over HTTP) applied BEFORE connect.
+  // A bootstrap payload (e.g. initial state loaded over HTTP) applied before connect.
   const source = new Y.Doc();
   source.getText("t").insert(0, "bootstrapped");
   eng.applyRemoteUpdate(Y.encodeStateAsUpdate(source));
@@ -81,7 +81,7 @@ test("applyRemoteUpdate seeds the doc without re-sending it as a local edit", ()
   assert.equal(eng.hasPending, false, "bootstrap state is NOT queued for reliable delivery");
   assert.equal(sent.length, 0, "nothing is sent before connect");
 
-  // On connect, only the SyncStep1 handshake goes out -- never a reliable
+  // On connect, only the SyncStep1 handshake goes out, never a reliable
   // { update, id } frame echoing the bootstrap state back to the server.
   eng.onConnect();
   assert.equal(sent.length, 1, "only the handshake was sent");
@@ -317,7 +317,7 @@ test("awareness: applying a remote update does NOT echo it back out (origin guar
   encoding.writeVarUint8Array(e, encodeAwarenessUpdate(awA, [docA.clientID]));
   const aliceFrame = encoding.toUint8Array(e);
 
-  // B applies it and must NOT re-send anything (no echo).
+  // B applies it and must not re-send anything (no echo).
   const docB = new Y.Doc();
   const awB = new Awareness(docB);
   const sentB = [];

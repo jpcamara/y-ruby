@@ -275,7 +275,7 @@ class SyncTest < Minitest::Test
     helper.broadcasts = []
 
     # sync_receive of a document update rebuilds the doc via sync_load_doc,
-    # which invokes on_load -- proving the loader runs in the channel's context.
+    # which invokes on_load, proving the loader runs in the channel's context.
     helper.sync_receive(update_message(YjsFixtures::TwoDocsMerged::DOC1_UPDATE), "doc-key")
 
     assert_equal "loader-42", seen

@@ -12,7 +12,7 @@ class DocTest < Minitest::Test
 
   def test_doc_accepts_a_client_id_without_validation
     # A client_id can be supplied for CRDT identity, but it is not validated and
-    # not readable back -- keeping it JS-safe is the caller's job (an out-of-range
+    # not readable back, keeping it JS-safe is the caller's job (an out-of-range
     # value is silently masked by yrs, not rejected). See protocol.rs.
     assert_instance_of YrbLite::Doc, YrbLite::Doc.new((2**53) - 1)
   end

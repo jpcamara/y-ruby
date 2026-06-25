@@ -4,7 +4,8 @@
 // delta so the server never sees an internal gap), cumulative acks, periodic
 // retransmit, and reconnect replay.
 //
-// It touches no transport, Yjs binding, or wire encoding. Inject two functions:
+// It doesn't touch the transport, the Yjs binding, or wire encoding. Inject two
+// functions:
 // send(update, id) transmits one update (raw merged bytes plus a cumulative
 // sequence id; you frame, base64, and put it on the socket), and merge(updates)
 // merges update byte-arrays into one (usually Y.mergeUpdates). Drive it from the

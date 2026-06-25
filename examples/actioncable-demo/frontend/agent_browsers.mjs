@@ -65,7 +65,7 @@ async function awaitConvergence(label, perDigit) {
 async function typeRound(round, perDigit) {
   console.log(`\n--- Round ${round}: ${N} browsers each type '${PER}' chars at once ---`)
   // Real DOM focus per session (agent-browser keyboard targets the focused
-  // element; Tiptap's programmatic focus alone doesn't take), then type ALL
+  // element; Tiptap's programmatic focus alone doesn't take), then type all
   // sessions concurrently.
   await Promise.all(SESSIONS.map((s) => ab(s, "click", ".ProseMirror")))
   await Promise.all(SESSIONS.map((s, i) => ab(s, "keyboard", "type", DIGITS[i].repeat(PER))))

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { ReliableSync } from "../dist/index.js";
 
 // End-to-end property under a lossy link: every enqueued update eventually
-// reaches the server and the client's queue drains -- without a real socket or
+// reaches the server and the client's queue drains, without a real socket or
 // yjs. The "merge" concatenates seq ranges so the server can verify coverage,
 // and a deterministic drop pattern exercises lost sends AND lost acks.
 test("no acknowledged update is lost under deterministic loss", () => {

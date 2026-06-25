@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Y.js Test Fixtures for yrb-lite -- static bytes captured from the real Y.js
+# Y.js Test Fixtures for yrb-lite, static bytes captured from the real Y.js
 # library so the Ruby/Rust port can be tested for byte-level interop.
 # Regenerate with: bun run test/fixtures/generate_fixtures.mjs > test/fixtures/yjs_fixtures.rb
 
@@ -41,7 +41,7 @@ module YjsFixtures
     UPDATE = YjsFixtures.b64("AAA=")
   end
 
-  # Fixture 5: three causally-dependent updates from one client -- insert "A",
+  # Fixture 5: three causally-dependent updates from one client, insert "A",
   # then "B", then "C". Each update references the previous item, so U3 cannot
   # integrate unless U2 has been applied first (it parks as a pending struct).
   module CausalChain
@@ -64,7 +64,7 @@ module YjsFixtures
     ].freeze
   end
 
-  # Fixture 7: a valid awareness (presence) message frame -- client 42 with a
+  # Fixture 7: a valid awareness (presence) message frame, client 42 with a
   # user + cursor. The server only ever relays such frames opaquely
   # (message_kind => 3); it never originates presence. So tests use this canned
   # frame instead of generating one server-side.

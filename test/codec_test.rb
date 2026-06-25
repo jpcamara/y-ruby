@@ -6,7 +6,7 @@ require_relative "fixtures/yjs_fixtures"
 # The stateless protocol codec, exposed as YrbLite module functions: classify a
 # frame (message_kind), extract its document delta (update_from_message), and
 # wrap a raw update into a relayable frame (wrap_update). No object or state is
-# involved -- the server never holds presence or document state to route a frame.
+# involved, the server never holds presence or document state to route a frame.
 class CodecTest < Minitest::Test
   def test_wrap_update_round_trips_through_the_codec
     frame = YrbLite.wrap_update(YjsFixtures::TwoDocsMerged::DOC1_UPDATE)

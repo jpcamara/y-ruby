@@ -130,7 +130,7 @@ test("applyRemoteUpdate seeds the doc without queuing a reliable frame on connec
   const c = fakeConsumer();
   const p = makeProvider(t, doc, c, { id: "boot1" });
 
-  // Seed initial state the way an app would from an HTTP-loaded snapshot, BEFORE
+  // Seed initial state the way an app would from an HTTP-loaded snapshot, before
   // connecting. A bare Y.applyUpdate here would be re-broadcast as a pending edit.
   const source = new Y.Doc();
   source.getText("t").insert(0, "from HTTP");

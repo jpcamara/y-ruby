@@ -12,7 +12,7 @@
 // ACK_LOSS (inbound ack drop rate).
 //
 // What it proves:
-//   * Every client's pending queue drains to empty -- all edits were acked.
+//   * Every client's pending queue drains to empty, all edits were acked.
 //   * Every unique edit marker is present on every client and on the server
 //     (no acknowledged edit silently lost), despite heavy loss.
 //   * All docs converge byte-for-byte with each other and the server.

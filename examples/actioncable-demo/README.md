@@ -124,7 +124,7 @@ writes with a Ruby `Mutex`, and both must hold up with no deadlock, no lost
 updates, and an exactly-once store.
 
 `boot_server.sh` boots either server (default `WORKERS=2`, a real multi-process
-deployment where the durable store -- not process memory -- is authoritative);
+deployment where the durable store (not process memory) is authoritative);
 `e2e_suite.sh` runs the shared durability/concurrency slice against it. Multiple
 processes share documents only through the cable adapter, so a multi-process run
 needs `CABLE_ADAPTER=redis` (the in-process `async` adapter can't span

@@ -102,8 +102,8 @@ const auditRes = await fetch(`http://localhost:${PORT}/docs/${ROOM}/audit`)
 const audit = await auditRes.json()
 // Each edit is its own transaction, but the reliable-delivery queue coalesces
 // updates that are still pending together (at-least-once delivery merges the
-// queue before resending), so the audit log can legitimately hold FEWER entries
-// than edits when ack latency outpaces the edit spacing -- without losing any
+// queue before resending), so the audit log can legitimately hold fewer entries
+// than edits when ack latency outpaces the edit spacing, without losing any
 // content. The byte-for-byte replay below is the real completeness guarantee;
 // here we only require the log captured something to replay.
 if (audit.count < 1) {

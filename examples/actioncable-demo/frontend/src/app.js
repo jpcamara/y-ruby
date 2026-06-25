@@ -30,7 +30,7 @@ window.__yrb = { provider, ydoc, user, editor: null }
 statusEl.dataset.state = "connecting"
 statusEl.textContent = `connecting as ${user.name}…`
 
-// Create the editor only AFTER the initial sync. Tiptap's Collaboration
+// Create the editor only after the initial sync. Tiptap's Collaboration
 // extension seeds an empty ProseMirror document (a single empty paragraph) into
 // the shared Y.Doc when it mounts; doing that before the server's state has
 // arrived makes every client insert its own competing top-level node, so remote

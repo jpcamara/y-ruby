@@ -1,5 +1,5 @@
 // Reliable-delivery test: proves a silently-lost client->server update is
-// recovered by the client's own retransmit -- no reconnect, no follow-up edit
+// recovered by the client's own retransmit, no reconnect, no follow-up edit
 // to trigger a resync. This is the "fire-and-forget send never reached the
 // server" failure that a plain CRDT provider loses forever (the server is idle,
 // so it never knows anything is missing and never asks anyone to resync).
@@ -189,7 +189,7 @@ await waitFor("bob receives the first edit", () =>
 
 // 2. Alice loses connectivity, then edits: the send (and every retransmit) is
 //    dropped before reaching the server. Nothing else is sent, so the server
-//    stays idle and never asks anyone to resync -- a plain provider would lose
+//    stays idle and never asks anyone to resync, a plain provider would lose
 //    this edit permanently.
 alice.blackhole = true
 alice.insertParagraph("Lost edit")
@@ -209,7 +209,7 @@ console.log(`ok: the edit is buffered and retried ${alice.dropped}x during the o
 
 // 3. Connectivity returns. The next retransmit reaches the server, which
 //    applies, acks, and relays it. Recovery is driven purely by the client
-//    retransmit -- no reconnect, no follow-up edit forcing a resync.
+//    retransmit, no reconnect, no follow-up edit forcing a resync.
 alice.blackhole = false
 await waitFor("retransmit recovers the lost edit once connectivity returns (acked)",
   () => alice.pending.size === 0)

@@ -8,7 +8,7 @@
 #
 # WORKERS controls the process count (default 2 — a realistic multi-process
 # deployment, not a single process). With WORKERS>1 the workers share documents
-# only through the cable adapter and the durable store, so the caller MUST set
+# only through the cable adapter and the durable store, so the caller must set
 # CABLE_ADAPTER=redis (the async adapter is in-process); we fail fast otherwise.
 #
 # Backgrounds the server, waits until it is healthy, and writes its pid to
@@ -18,7 +18,7 @@ set -euo pipefail
 SERVER="${SERVER:-puma}"
 PORT="${PORT:-3777}"
 WORKERS="${WORKERS:-2}"
-# Deliberately NOT named PIDFILE: config/puma.rb reads ENV["PIDFILE"] and would
+# Deliberately not named PIDFILE: config/puma.rb reads ENV["PIDFILE"] and would
 # then manage this file itself, racing the pid we capture below.
 PIDFILE="${SERVER_PIDFILE:-/tmp/e2e-server.pid}"
 LOG="${SERVER_LOG:-/tmp/e2e-server.log}"
