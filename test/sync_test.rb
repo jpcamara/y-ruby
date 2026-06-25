@@ -93,7 +93,7 @@ class SyncTest < Minitest::Test
     assert_nil klass.max_frame_bytes
   end
 
-  def test_sync_for_uses_stateless_streams_and_answers_from_store
+  def test_sync_subscribed_uses_stateless_streams_and_answers_from_store
     store = [YjsFixtures::TwoDocsMerged::DOC1_UPDATE]
     helper = helper_for(store: store)
     helper.sync_subscribed("doc")

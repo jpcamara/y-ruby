@@ -11,7 +11,7 @@
 // The constructor does NOT auto-connect: wire your editor binding first, then
 // call `connect()`.
 //
-// Observe the connection with `provider.on("status", ({ status }) => ...)`
+// Observe the connection with `provider.onStatusChange(({ status }) => ...)`
 // (`"connecting" | "connected" | "synced" | "disconnected"`) or the `status`
 // getter. On `disconnect()` / `destroy()` -- and on browser `pagehide` -- the
 // provider broadcasts a presence removal so peers drop our cursor immediately

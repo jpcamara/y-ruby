@@ -11,7 +11,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::{Doc, ReadTxn, Transact};
 
 /// Classify a frame: a non-zero code only for exactly one well-formed message
-/// that consumes the whole buffer (see `RbAwareness::message_kind` for codes).
+/// that consumes the whole buffer (the codes are the match arms below).
 pub(crate) fn classify_message(bytes: &[u8]) -> u8 {
     let mut decoder = DecoderV1::new(Cursor::new(bytes));
     let msg = match Message::decode(&mut decoder) {

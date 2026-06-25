@@ -1,5 +1,5 @@
 // Crash-recovery durability test. Run in two phases around a hard `kill -9`
-// of the server (orchestrated by crash_recovery.sh):
+// of the server (the manual flow in the demo README's crash-recovery section):
 //
 //   PHASE=write  ROOM=... bun crash_recovery.mjs   # make edits, wait until logged
 //   <SIGKILL the server, restart it>

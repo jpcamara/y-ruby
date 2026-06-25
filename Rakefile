@@ -54,7 +54,7 @@ namespace :release do
          a. bump packages/yrb-lite-client/package.json version, commit
          b. cd packages/yrb-lite-client && npm publish
 
-      The actioncable gem depends on `yrb-lite >= 0.1.0.beta5` (a floor, so it tolerates
+      The actioncable gem pins a minimum `yrb-lite` (a floor, so it tolerates
       newer core releases); only raise it when it needs a newer core API.
     STEPS
   end

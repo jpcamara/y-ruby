@@ -213,8 +213,7 @@ test("disconnect() broadcasts a presence removal while the transport is still li
   assert.equal(c.calls.removed, 1, "unsubscribe runs after the microtask");
 });
 
-test("destroy() tears down the Awareness it created, but not a caller-supplied one", () => {
-  // owns: default Awareness -> destroyed on destroy()
+test("destroy() tears down the Awareness it created", () => {
   const owned = new ActionCableProvider(new Y.Doc(), fakeConsumer(), "DocumentChannel", { id: "o1" });
   let ownedDestroyed = 0;
   const origDestroy = owned.awareness.destroy.bind(owned.awareness);
@@ -224,20 +223,6 @@ test("destroy() tears down the Awareness it created, but not a caller-supplied o
   };
   owned.destroy();
   assert.equal(ownedDestroyed, 1, "a provider-created Awareness is destroyed");
-
-  // borrowed: caller-supplied Awareness -> left alone
-  const doc = new Y.Doc();
-  const mine = new Awareness(doc);
-  let mineDestroyed = 0;
-  const origMine = mine.destroy.bind(mine);
-  mine.destroy = () => {
-    mineDestroyed += 1;
-    origMine();
-  };
-  const borrowed = new ActionCableProvider(doc, fakeConsumer(), "DocumentChannel", { id: "o2" }, { awareness: mine });
-  borrowed.destroy();
-  assert.equal(mineDestroyed, 0, "a caller-supplied Awareness is left for the caller to own");
-  mine.destroy(); // cleanup the reaper interval
 });
 
 test("the provider creates and owns an Awareness", (t) => {

@@ -5,8 +5,8 @@
 // We check the things likely to break under AnyCable:
 //   - does subscribing even work (stream_from has a custom block)?
 //   - liveness: does B receive A's edit?
-//   - echo: does A receive its own edit back (the origin filter lives in the
-//     stream_from block, which AnyCable doesn't run)?
+//   - echo: does A receive its own edit back? (store-backed streams echo to the
+//     sender; applying the same CRDT update twice is a no-op)
 //   - server-side read: does Puma's /content reflect the doc, given it holds no
 //     replica and the RPC process handled the edit?
 import * as Y from "yjs"

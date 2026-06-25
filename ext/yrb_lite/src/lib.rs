@@ -35,11 +35,11 @@ fn assert_thread_safe() {
 /// - It must not touch any Ruby object or call any Ruby API. Inputs are copied
 ///   out of Ruby strings before entering, and results are converted to Ruby
 ///   objects after returning.
-/// - It must be `Send` (it runs while other threads own the GVL). `&Doc` and
-///   `&Mutex<Awareness>` are fine: both are `Sync` (asserted above).
-/// - LOCK DISCIPLINE: any native lock it takes -- the doc's internal RwLock OR
-///   the awareness `Mutex` (`self.0.lock()`) -- must be acquired AND released
-///   inside this closure (GVL already dropped). Never lock with the GVL held
+/// - It must be `Send` (it runs while other threads own the GVL). `&Doc` is
+///   fine: it's `Sync` (asserted above).
+/// - LOCK DISCIPLINE: any native lock it takes -- the doc's internal RwLock --
+///   must be acquired AND released inside this closure (GVL already dropped).
+///   Never lock with the GVL held
 ///   (e.g. before calling `nogvl`), or a thread waiting on the lock while
 ///   holding the GVL can deadlock against the GVL reacquire. Same reason we
 ///   never hold a lock across the GVL boundary.
@@ -114,7 +114,7 @@ fn yrb_error(msg: String) -> Error {
 }
 
 // CLIENT IDs ARE NOT VALIDATED -- whoever supplies the id (the app via
-// `Doc.new(id)` / `Awareness.new(id)`, or a remote peer over the wire) is
+// `Doc.new(id)`, or a remote peer over the wire) is
 // responsible for keeping it JS-safe (<= 2^53 - 1). See the protocol.rs header
 // for why (and `ClientID::try_new`, proposed upstream, for strict rejection).
 
