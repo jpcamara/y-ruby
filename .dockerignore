@@ -1,0 +1,34 @@
+# Build context for examples/actioncable-demo/Dockerfile is this repo root.
+# Keep the gem source (lib, ext, Cargo.*, *.gemspec), packages/yrb-lite-client
+# source, and the demo; drop everything heavy or rebuilt in the image.
+
+.git
+**/node_modules
+
+# Rust build output (large; the extension is recompiled in the image).
+target
+**/target
+
+# Host-compiled native libraries (wrong arch for the Linux image; rebuilt there).
+**/*.bundle
+**/*.so
+**/*.dylib
+
+# Packaged gems / build artifacts.
+pkg
+*.gem
+
+# Per-app runtime dirs.
+**/tmp
+**/log
+examples/actioncable-demo/data
+
+# Rebuilt inside the image.
+packages/yrb-lite-client/dist
+examples/actioncable-demo/public/app.js
+examples/actioncable-demo/public/lexxy.js
+examples/actioncable-demo/public/lexxy.css
+
+# Local noise.
+.DS_Store
+**/.DS_Store

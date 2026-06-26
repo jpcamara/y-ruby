@@ -32,6 +32,61 @@ Open http://localhost:3000 in two windows and type. Text and cursors sync
 between them. Open http://localhost:3000/docs/demo/content to watch the
 server's own view of the document.
 
+> The default durable store is Postgres, reached over the `/tmp` unix socket — so
+> "Run it" above expects a local Postgres. To avoid that (or a port clash with
+> your own services), use Docker below.
+
+## Run it with Docker
+
+The whole demo — Rails/Puma **web**, **Postgres**, and **Redis** — runs in
+containers, with the services on **non-standard host ports** so they never
+collide with a Postgres/Redis you already run locally:
+
+```bash
+cd examples/actioncable-demo
+docker compose up --build
+```
+
+| Service  | Host port | In-container |
+|----------|-----------|-------------|
+| web      | **3100**  | 3000        |
+| postgres | **5442**  | 5432        |
+| redis    | **6399**  | 6379        |
+
+Then open two windows:
+
+- http://localhost:3100/docs/demo — the Tiptap editor
+- http://localhost:3100/docs/demo/lexxy — the Lexxy editor (lexxy-realtime)
+
+The image carries Rust (to compile the native extension) and bun (to build the
+front end); the build context is the **repo root** because the demo uses the gem
+via `path:` and the Lexxy page pulls [`lexxy-realtime`](https://github.com/jpcamara/lexxy-realtime)
+(cloned at build; override with `--build-arg LEXXY_REALTIME_REF=<tag>`).
+
+### Just the services (for host-run dev or the e2e suites)
+
+To run the app/tests on the host but borrow the containerized Postgres/Redis on
+their non-standard ports — no local pg/redis needed, no collisions:
+
+```bash
+docker compose up -d postgres redis
+
+# point the app (or any test harness) at them:
+export PGHOST=localhost PGPORT=5442 PGUSER=postgres PGPASSWORD=postgres
+export REDIS_URL=redis://localhost:6399/15
+bin/rails db:prepare && bin/rails s          # or: CABLE_ADAPTER=redis WORKERS=2 frontend/boot_server.sh
+```
+
+All of pg/redis wiring is env-driven (`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`,
+`REDIS_URL`), so the same overrides retarget the demo, the multi-process run, and
+the AnyCable run at the containerized services.
+
+### AnyCable
+
+The Go gateway is an opt-in profile (`docker compose --profile anycable up`); it
+needs the web service in AnyCable RPC mode. See the [AnyCable](#anycable) section
+for the moving parts.
+
 ## How it works
 
 On the server, [`app/channels/document_channel.rb`](app/channels/document_channel.rb)

@@ -1,8 +1,13 @@
 default: &default
   adapter: postgresql
   encoding: unicode
+  # Defaults target a local Postgres over the /tmp unix socket. Set PGHOST/PGPORT
+  # to point at a TCP server instead (e.g. the docker-compose Postgres on a
+  # non-standard port, or the `postgres` service host inside the compose network).
   host: <%= ENV.fetch("PGHOST", "/tmp") %>
+  port: <%= ENV.fetch("PGPORT", 5432) %>
   username: <%= ENV.fetch("PGUSER", ENV["USER"]) %>
+  password: <%= ENV["PGPASSWORD"] %>
   # The AnyCable RPC server runs ~30 worker threads; give the pool headroom so
   # concurrent record/replay calls don't queue on connection checkout.
   pool: <%= ENV.fetch("DB_POOL", 50) %>

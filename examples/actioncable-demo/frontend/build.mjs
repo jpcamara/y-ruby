@@ -20,11 +20,14 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 // One canonical resolution per shared singleton, taken from the top-level
 // node_modules so every importer shares it. yjs / y-protocols / lib0 are the
-// CRDT singletons; `lexical` is added for the Lexxy page, since Lexical asserts
-// node-class identity (a registered node's class must match the constructed
-// node's), and two copies of `lexical` would break that the same way two copies
-// of yjs break y-prosemirror.
-const SINGLETONS = ["yjs", "y-protocols", "lib0", "lexical"]
+// CRDT singletons; `lexical` + `@lexical/yjs` are added for the Lexxy page.
+// Two copies of `lexical` would break Lexical's node-class identity the same way
+// two copies of yjs break y-prosemirror. `@lexical/yjs` must be pinned too
+// because lexxy-realtime (a file:/sibling dep) imports it from OUTSIDE the demo's
+// node_modules tree -- without this, bundling lexxy.js can't resolve it from the
+// lexxy-realtime package location (e.g. inside Docker, where the dep is a real
+// sibling dir rather than a copy under node_modules).
+const SINGLETONS = ["yjs", "y-protocols", "lib0", "lexical", "@lexical/yjs"]
 const canonical = (name) => resolve(here, "node_modules", name)
 
 const dedupeSingletons = {

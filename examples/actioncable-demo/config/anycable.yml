@@ -1,7 +1,7 @@
 default: &default
   broadcast_adapter: redis
-  redis_url: redis://localhost:6379/15
-  rpc_host: "127.0.0.1:50051"
+  redis_url: <%= ENV.fetch("REDIS_URL", "redis://localhost:6379/15") %>
+  rpc_host: <%= ENV.fetch("ANYCABLE_RPC_HOST", "127.0.0.1:50051") %>
 
 development:
   <<: *default

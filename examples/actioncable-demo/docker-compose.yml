@@ -1,0 +1,92 @@
+# Full containerized demo: web (Rails/Puma) + Postgres + Redis, all on
+# NON-STANDARD host ports so nothing collides with a Postgres/Redis you already
+# run locally.
+#
+#   cd examples/actioncable-demo
+#   docker compose up --build
+#   open http://localhost:3100/docs/demo        (Tiptap)
+#   open http://localhost:3100/docs/demo/lexxy  (Lexxy / lexxy-realtime)
+#
+# Host ports (container ports in parens):
+#   web       3100 (3000)
+#   postgres  5442 (5432)
+#   redis     6399 (6379)
+#
+# Inside the compose network, services reach each other by name on standard
+# ports (postgres:5432, redis:6379) -- the non-standard numbers are host-side
+# only. The AnyCable gateway is opt-in (profile: anycable); see README.
+
+name: yrb-lite-demo
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: yrb_lite_demo_development
+    ports:
+      - "5442:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6399:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      # The gem (path: "../..") and yrb-lite-client (file: packages/...) live in
+      # the repo root, so that is the build context.
+      context: ../..
+      dockerfile: examples/actioncable-demo/Dockerfile
+    environment:
+      RAILS_ENV: development
+      # Reach Postgres/Redis by service name on their standard container ports.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      REDIS_URL: redis://redis:6379/15
+      # Use the Redis cable adapter (cross-process broadcasts) instead of async.
+      CABLE_ADAPTER: redis
+    ports:
+      - "3100:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Opt-in AnyCable WebSocket gateway (Go). Start with:
+  #   docker compose --profile anycable up --build
+  # It terminates WebSockets and talks to the Rails AnyCable RPC server. Running
+  # the demo pages against it also needs the web service in RPC mode -- see the
+  # README "AnyCable" section.
+  anycable-go:
+    image: anycable/anycable-go:1.5
+    profiles: ["anycable"]
+    environment:
+      ANYCABLE_HOST: "0.0.0.0"
+      ANYCABLE_PORT: "8080"
+      ANYCABLE_REDIS_URL: redis://redis:6379/15
+      ANYCABLE_RPC_HOST: "web:50051"
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
