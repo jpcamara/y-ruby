@@ -124,7 +124,11 @@ class TestClient {
   close() {
     this.awareness.setLocalState(null)
     this.sendPresenceFor([this.doc.clientID])
-    this.ws.close()
+    // Let the presence-removal frame flush before tearing down the socket;
+    // closing immediately can drop the buffered send (so peers never see the
+    // removal until the awareness timeout). Mirrors the provider's deferred
+    // unsubscribe.
+    setTimeout(() => this.ws.close(), 50)
   }
 }
 

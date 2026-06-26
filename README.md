@@ -21,7 +21,7 @@ end
 
 On the browser, use the `ActionCableProvider` from the 
 [`yrb-lite-client`](https://www.npmjs.com/package/yrb-lite-client) npm package.
-Integrates with any editor that includes Y.js support, such as TipTap, ProseMirror 
+Integrates with any editor that includes Y.js support, such as Tiptap, ProseMirror
 and [Lexxy](https://www.npmjs.com/package/lexxy-realtime).
 
 ## What you get
@@ -45,7 +45,7 @@ shape.
 
 ## What isn't "lite"
 
-The surface area may be "lite", but a core focus is on on durability, resiliency, delivery
+The surface area may be "lite", but a core focus is on durability, resiliency, delivery
 guarantees, correctness, and thread safety.
 
 Towards that goal, `yrb-lite` adds capabilities that may even stand out in the Yjs ecosystem:
@@ -57,7 +57,7 @@ Towards that goal, `yrb-lite` adds capabilities that may even stand out in the Y
 - Gap detection in document updates: before applying an update and sending an ack to the client,
   `yrb-lite` checks whether the update results in any causal gap. Ie, an update comes through
   which depends on a previous update that is not yet present in the document. This can result in
-  a document stuck with "pending" updates, which will _never_ apply if the missing update is note sent.
+  a document stuck with "pending" updates, which will _never_ apply if the missing update is not sent.
   To avoid this, `yrb-lite` does not apply the update, and starts a new y-protocol sync with the client.
   That will cause the client to synchronize its document with the server, sending through any updates
   that may have been missed
@@ -69,8 +69,8 @@ shared text, arrays, maps, XML - to build and query documents in Ruby. It was a 
 inspiration for my use of Yjs in Ruby/Rails, and I originally considered building
 on top of it. There are a few reasons I went with `yrb-lite` instead:
 
-- `yrb` is largely unmaintained. It was built as an expirement for Gitlab, and the original
-  author mostly moved onto other projects
+- `yrb` is largely unmaintained. It was built as an experiment for GitLab, and the original
+  author mostly moved onto other projects.
 - [It isn't thread-safe](https://github.com/y-crdt/yrb/issues/72). It segfaults in a threaded
   environment (such as ActionCable...)
 - It's a much larger set of features to maintain, which most people don't need. The vast
