@@ -13,7 +13,6 @@ import "@37signals/lexxy"
 // path. Bun bundles it (and its relative @imports) and emits ../public/lexxy.css.
 import "../node_modules/@37signals/lexxy/dist/stylesheets/lexxy.css"
 import * as Y from "yjs"
-import { Awareness } from "y-protocols/awareness"
 import { createConsumer } from "@rails/actioncable"
 import { YrbLiteProvider } from "lexxy-realtime" // also registers <lexxy-collaboration>
 
@@ -30,9 +29,9 @@ const user = {
 }
 
 const ydoc = new Y.Doc()
-const awareness = new Awareness(ydoc)
 const consumer = createConsumer()
-const provider = new YrbLiteProvider(ydoc, consumer, "DocumentChannel", { id: documentId }, { awareness })
+const provider = new YrbLiteProvider(ydoc, consumer, "DocumentChannel", { id: documentId })
+const awareness = provider.awareness // the provider owns presence; read it back
 
 // Exposed for the browser console (parity with the Tiptap page's window.__yrb).
 window.__yrb = { provider, ydoc, awareness, user }
@@ -58,7 +57,6 @@ function mount() {
   collab.setAttribute("channel-params", JSON.stringify({ id: documentId }))
   collab.consumer = consumer
   collab.doc = ydoc
-  collab.awareness = awareness
   collab.provider = provider
   editorEl.appendChild(collab)
   provider.connect() // the element wires the binding; we own the connection
