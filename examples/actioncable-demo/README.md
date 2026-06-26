@@ -119,9 +119,8 @@ The whole e2e suite is server-agnostic — the harnesses just need the app on
 `$PORT` — so the same scenarios run under either Puma (threaded) or
 [Falcon](https://github.com/socketry/falcon) (fiber scheduler). Running them
 under Falcon proves the native extension behaves correctly inside a fiber
-reactor: it releases the GVL for CRDT work and the concern serializes store
-writes with a Ruby `Mutex`, and both must hold up with no deadlock, no lost
-updates, and an exactly-once store.
+reactor: it releases the GVL for CRDT work and must hold up with no deadlock and
+no lost updates, with the durable store still replaying to the same document.
 
 `boot_server.sh` boots either server (default `WORKERS=2`, a real multi-process
 deployment where the durable store (not process memory) is authoritative);

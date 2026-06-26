@@ -31,8 +31,8 @@ cargo fmt   --manifest-path ext/yrb_lite/Cargo.toml -- --check   # Rust format
 cargo clippy --manifest-path ext/yrb_lite/Cargo.toml --all-targets -- -D warnings
 ```
 
-`cargo fmt -m ext/yrb_lite/Cargo.toml` and `bundle exec rubocop -A` auto-fix
-most issues.
+`cargo fmt --manifest-path ext/yrb_lite/Cargo.toml` and `bundle exec rubocop -A`
+auto-fix most issues.
 
 ## Layout
 
@@ -61,7 +61,7 @@ cd examples/actioncable-demo
 bundle install
 bin/rails db:prepare
 cd frontend && bun install && bun run build && cd ..
-AUDIT=1 bin/rails s
+bin/rails s
 ```
 
 ## Pull requests

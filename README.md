@@ -334,9 +334,10 @@ broadcast. Replay the deltas onto a fresh `Y.Doc` and you get the document back
 exactly.
 
 If the recorder raises (say the store is down), the change is rejected: not
-applied, not sent to anyone. The cost is a synchronous durable write per change,
-which serializes that document's writes. Other documents use other locks and run
-in parallel.
+applied, not sent to anyone. The cost is a synchronous durable write on the path
+of every change. There's no in-gem per-document lock; concurrent writes to one
+document can both record (at-least-once), and since CRDT apply is idempotent a
+duplicate record replays to the same document.
 
 The demo wires `on_change` to a durable Postgres-backed log by default, with an
 fsync'd file log available via `STORE_KIND=file`, and checks end to end that the
@@ -373,22 +374,19 @@ locking.
 
 That comes from how the underlying types work, not from locking on top:
 
-- `yrs::Doc` is `Send + Sync`. Every operation takes the document's internal
-  RwLock with blocking semantics (`read_blocking`/`write_blocking`), so
-  concurrent access serializes instead of erroring or corrupting state.
-- `yrs::sync::Awareness` is `Send` but not `Sync` in the current yrs version,
-  so the Ruby wrapper stores it in a `Mutex`. The mutex is always acquired
-  inside the no-GVL native section and released before Ruby runs again.
-- The extension uses no `RefCell`-style runtime borrows that could panic under
-  re-entrancy. Each native method opens and closes its transaction or mutex
-  guard inside one call.
-- Static assertions in `lib.rs` prove `Doc` and `Mutex<Awareness>` are
-  `Send + Sync`. If a yrs upgrade regressed either wrapper's thread-safety, the
-  gem would fail to compile instead of quietly turning thread-unsafe.
+- `yrs::Doc` is `Send + Sync`. `transact`/`transact_mut` acquire the document's
+  internal RwLock with blocking semantics, so concurrent access serializes
+  instead of erroring or corrupting state.
+- The extension wraps the `Doc` directly, with no `RefCell` or other interior
+  mutability that could panic under re-entrancy. Each native method opens and
+  closes its transaction inside one call.
+- A static assertion in `lib.rs` proves `Doc` is `Send + Sync`. If a yrs upgrade
+  regressed its thread-safety, the gem would fail to compile instead of quietly
+  turning thread-unsafe.
 
-`test/thread_safety_test.rb` runs shared docs, the full sync handshake, fan-in
-sync, and awareness state across 8 threads at once, and checks the interleaving
-doesn't change convergence.
+`test/thread_safety_test.rb` runs shared docs, the full sync handshake, and
+fan-in sync across 8 threads at once, and checks the interleaving doesn't change
+convergence.
 
 ### Parallelism (GVL release)
 
@@ -428,10 +426,10 @@ YrbLite::MSG_SYNC_UPDATE     # 2 - Incremental update
 ```
 Client A                          Server
    |                                  |
-   |-------- start() --------------->|
+   |-------- connect() ------------->|
    |  (SyncStep1 + Awareness)        |
    |                                  |
-   |<------- handle() response ------|
+   |<--- handle_sync_message resp ---|
    |  (SyncStep2)                    |
    |                                  |
    |  (Document synchronized!)        |

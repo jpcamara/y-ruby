@@ -69,8 +69,9 @@ On `disconnect()` / `destroy()` — and on browser `pagehide` — the provider
 broadcasts a presence removal so peers drop your cursor immediately instead of
 waiting for the awareness timeout. `destroy()` is synchronous (the unsubscribe is
 deferred one microtask so that removal flushes first) and tears down the
-`Awareness` only if the provider created it; a `Awareness` you pass in is yours
-to own.
+`Awareness` it created. (`ActionCableProvider` always creates its own; to bring
+your own `Awareness`, drop down to `YProtocolSession`, which leaves it for you to
+own.)
 
 On the server, include `YrbLite::ActionCable::Sync` in a channel named
 `DocumentChannel` (the [`yrb-lite-actioncable`](https://rubygems.org/gems/yrb-lite-actioncable)
