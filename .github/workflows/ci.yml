@@ -72,6 +72,23 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  decoder:
+    name: yrb-lite-decode (Bun round-trip)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/yrb-lite-decode
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      # lexxy's @lexical/yjs CollabElementNode.splice patch is needed on the
+      # decode path; bun blocks the postinstall, so apply it explicitly.
+      - run: bunx patch-package
+      # Headless Lexical round-trip: build a real @lexical/yjs document, take its
+      # CRDT state, decode it back, and assert text + formatting survive.
+      - run: bun run test
+
   demo:
     name: Demo e2e (Ruby ${{ matrix.ruby }})
     runs-on: ubuntu-latest

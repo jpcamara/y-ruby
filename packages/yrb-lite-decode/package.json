@@ -1,0 +1,22 @@
+{
+  "name": "yrb-lite-decode",
+  "private": true,
+  "type": "module",
+  "description": "The Bun-compiled decoder binary behind the yrb-lite-decoder gem: turns a stored Yjs CRDT state into plain text (index/preview) or a full-fidelity Lexical EditorState / HTML render — with no Node runtime.",
+  "scripts": {
+    "build": "bun build src/decode.ts --compile --minify --outfile bin/yrb-lite-decode",
+    "dev": "bun src/decode.ts",
+    "postinstall": "patch-package",
+    "test": "bun src/roundtrip.ts"
+  },
+  "dependencies": {
+    "yjs": "^13.6.20",
+    "@lexical/headless": "0.44.0",
+    "@lexical/yjs": "0.44.0",
+    "@lexical/html": "0.44.0",
+    "lexical": "0.44.0"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.0"
+  }
+}

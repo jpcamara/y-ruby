@@ -53,3 +53,7 @@ bench/large_update.bin
 
 # TypeScript build output
 packages/yrb-lite-client/dist/
+
+# yrb-lite-decode (Bun full-fidelity binary): built artifact + deps, not committed
+/packages/yrb-lite-decode/bin/
+/packages/yrb-lite-decode/node_modules/
