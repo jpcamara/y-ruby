@@ -4,9 +4,10 @@ use magnus::{
 use yrs::sync::{Message, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Doc, GetString, ReadTxn, Transact, XmlFragment, XmlOut};
+use yrs::{Doc, GetString, ReadTxn, Transact};
 
 mod protocol;
+mod read;
 use protocol::{classify_message, merged_doc_update, update_advances_doc, update_is_ready};
 
 /// Wrapper around yrs Doc.
@@ -162,31 +163,15 @@ impl RbDoc {
         })
     }
 
-    /// Read an XML-shaped root as text, one top-level block per line.
-    ///
-    /// ProseMirror stores blocks as `Y.XmlElement` children (`<paragraph>…`);
-    /// Lexical stores each block as a sibling `Y.XmlText` (node metadata as an
-    /// embed, which yrs omits from the string). We serialize each top-level child
-    /// and join with "\n", so adjacent blocks don't merge into one run of words.
-    /// Without the separator, Lexical -- whose children carry no element tags --
-    /// would glue paragraphs together (e.g. "first paragraphsecond paragraph"),
-    /// breaking word boundaries for search/preview. Element tags are kept (the
-    /// caller strips them); deeper nesting is flattened but its inner tags still
-    /// separate words after stripping.
+    /// Text of an XML-shaped root, one top-level block per line. The walk +
+    /// block-join logic lives in `read::xml_blocks_text` (pure, Rust-tested);
+    /// this just opens the transaction and resolves the root.
     fn read_xml(&self, name: String) -> Option<String> {
         let doc = &self.0;
         nogvl(move || {
             let txn = doc.transact();
             let fragment = txn.get_xml_fragment(name.as_str())?;
-            let blocks: Vec<String> = fragment
-                .children(&txn)
-                .map(|node| match node {
-                    XmlOut::Element(e) => e.get_string(&txn),
-                    XmlOut::Text(t) => t.get_string(&txn),
-                    XmlOut::Fragment(f) => f.get_string(&txn),
-                })
-                .collect();
-            Some(blocks.join("\n"))
+            Some(read::xml_blocks_text(&txn, &fragment))
         })
     }
 
