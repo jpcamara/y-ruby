@@ -29,12 +29,15 @@ module YrbLite
       field ||= YrbLite::Doc.new.tap { |d| d.apply_update(state) }.root_names.first
       return "" unless field
 
-      # Lexical XmlText and plain Text read straight to text. (read_text coerces
-      # the root, so each attempt gets a fresh doc.)
+      # A plain `Y.Text` root (a simple shared-text editor) reads straight out.
+      # (A yrs root's type is fixed by its first typed access, so each reader
+      # gets a fresh doc to try a different shared type against the same state.)
       direct = load(state).read_text(field)
       return normalize(direct) if direct && !direct.strip.empty?
 
-      # ProseMirror XmlFragment serializes as XML markup — strip the tags.
+      # Lexical (each block a sibling `Y.XmlText`) and ProseMirror (blocks are
+      # `Y.XmlElement`s) both come back from read_xml as block-per-line markup;
+      # strip any element tags to plain text.
       markup = load(state).read_xml(field)
       markup ? normalize(strip_tags(markup)) : ""
     end
@@ -54,7 +57,10 @@ module YrbLite
     end
 
     def normalize(text)
-      text.gsub(/[ \t]+/, " ").gsub(/\n{3,}/, "\n\n").strip
+      text.gsub(/[ \t]+/, " ")     # collapse runs of spaces/tabs
+          .gsub(/ *\n */, "\n")    # trim spaces left around block separators
+          .gsub(/\n{3,}/, "\n\n")  # cap blank-line runs
+          .strip
     end
   end
 end

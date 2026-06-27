@@ -11,7 +11,12 @@ All notable changes to the `yrb-lite-decoder` gem.
   - `text` — plain text (Lexical `Y.XmlText`, plain `Y.Text`, ProseMirror
     `Y.XmlFragment`), for search indexing and exports.
   - `preview` — a compact, truncated single-line preview for list UIs.
-- Requires the core `Doc` content readers (`root_names`, `read_text`, `read_xml`).
+- Block boundaries are preserved as newlines across all three editors, so
+  adjacent paragraphs don't merge into one run of words (which would break word
+  boundaries for search). Verified against real Lexical, ProseMirror/TipTap, and
+  plain-text fixtures in `test/decoder_test.rb`.
+- Requires the core `Doc` content readers (`root_names`, `read_text`, `read_xml`);
+  `read_xml` joins a root's top-level blocks with newlines.
 
 Full-fidelity Lexical reconstruction (EditorState JSON / HTML) is intentionally
 **not** in this gem; it's the separate, opt-in `yrb-lite-decode` Bun binary (see
