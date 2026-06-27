@@ -65,3 +65,4 @@ Naming/FileName:
   Exclude:
     - "lib/yrb-lite.rb"
     - "lib/yrb-lite-actioncable.rb"
+    - "lib/yrb-lite-decoder.rb"
