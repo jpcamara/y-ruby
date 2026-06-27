@@ -175,6 +175,19 @@ impl RbDoc {
         })
     }
 
+    /// A `Y.Map` root serialized to a JSON object string (keys sorted; values
+    /// recursive). Complements read_text/read_xml for structured shared state.
+    /// Callers parse the JSON (e.g. `JSON.parse(doc.read_map("state"))`). The
+    /// serialization lives in `read::map_json` (pure, Rust-tested).
+    fn read_map(&self, name: String) -> Option<String> {
+        let doc = &self.0;
+        nogvl(move || {
+            let txn = doc.transact();
+            let map = txn.get_map(name.as_str())?;
+            Some(read::map_json(&txn, &map))
+        })
+    }
+
     /// Encode state as update (optionally diffed against a state vector)
     fn encode_state_as_update(&self, args: &[Value]) -> Result<RString, Error> {
         let sv_bytes: Option<Vec<u8>> = if args.is_empty() {
@@ -352,6 +365,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     doc_class.define_method("root_names", method!(RbDoc::root_names, 0))?;
     doc_class.define_method("read_text", method!(RbDoc::read_text, 1))?;
     doc_class.define_method("read_xml", method!(RbDoc::read_xml, 1))?;
+    doc_class.define_method("read_map", method!(RbDoc::read_map, 1))?;
     doc_class.define_method("update_ready?", method!(RbDoc::update_ready, 1))?;
     doc_class.define_method("update_advances?", method!(RbDoc::update_advances, 1))?;
     doc_class.define_method("sync_step1", method!(RbDoc::sync_step1, 0))?;

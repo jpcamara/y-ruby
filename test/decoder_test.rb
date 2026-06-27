@@ -3,6 +3,7 @@
 require "test_helper"
 require "yrb_lite/decoder"
 require "base64"
+require "json"
 
 # Decoder coverage across the major editors' Yjs storage shapes. The fixtures are
 # real CRDT states captured from each encoder:
@@ -18,6 +19,9 @@ class DecoderTest < Minitest::Test
   PROSEMIRROR = "AQr12Z2xBQAHAQdkZWZhdWx0AwdoZWFkaW5nKAD12Z2xBQAFbGV2ZWwBdwExh/XZnbEFAAMJcGFyYWdyYXBoBwD12Z2xBQAGBAD12Z2xBQMQQSBUaXBUYXAgSGVhZGluZwcA9dmdsQUCBgQA9dmdsQUUClBsYWluIGFuZCCG9dmdsQUeBGJvbGQEdHJ1ZYT12Z2xBR8EYm9sZIb12Z2xBSMEYm9sZARudWxsAA=="
 
   PLAINTEXT = "AQHhwvm8AgAEAQdjb250ZW50D2p1c3QgcGxhaW4gdGV4dAA="
+
+  # A Y.Map "state" = { title: "Dashboard", count: 3, active: true, price: 9.99 }.
+  MAP = "AQSP+KW4BQAoAQVzdGF0ZQV0aXRsZQF3CURhc2hib2FyZCgBBXN0YXRlBWNvdW50AX0DKAEFc3RhdGUGYWN0aXZlAXgoAQVzdGF0ZQVwcmljZQF7QCP64UeuFHsA"
   # rubocop:enable Layout/LineLength
 
   def decode(b64)
@@ -74,5 +78,24 @@ class DecoderTest < Minitest::Test
     assert_equal "", YrbLite::Decoder.load(decode(LEXICAL)).read_text("root").to_s.strip
     assert_includes YrbLite::Decoder.load(decode(LEXICAL)).read_xml("root"), "\n"
     assert_equal "just plain text", YrbLite::Decoder.load(decode(PLAINTEXT)).read_text("content")
+  end
+
+  # --- read_map (structured state) ------------------------------------------
+
+  def test_read_map_returns_state_as_json
+    doc = YrbLite::Doc.new
+    doc.apply_update(decode(MAP))
+
+    assert_equal(
+      { "title" => "Dashboard", "count" => 3, "active" => true, "price" => 9.99 },
+      JSON.parse(doc.read_map("state"))
+    )
+  end
+
+  def test_read_map_missing_root_is_nil
+    doc = YrbLite::Doc.new
+    doc.apply_update(decode(MAP))
+
+    assert_nil doc.read_map("nope")
   end
 end

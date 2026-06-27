@@ -15,8 +15,10 @@ All notable changes to the `yrb-lite-decoder` gem.
   adjacent paragraphs don't merge into one run of words (which would break word
   boundaries for search). Verified against real Lexical, ProseMirror/TipTap, and
   plain-text fixtures in `test/decoder_test.rb`.
-- Requires the core `Doc` content readers (`root_names`, `read_text`, `read_xml`);
-  `read_xml` joins a root's top-level blocks with newlines.
+- Requires the core `Doc` content readers (`root_names`, `read_text`, `read_xml`,
+  `read_map`); `read_xml` joins a root's top-level blocks with newlines, and
+  `read_map` serializes a `Y.Map` root to a JSON object string (sorted keys,
+  recursive values) — for reading structured shared state server-side.
 
 Full-fidelity Lexical reconstruction (EditorState JSON / HTML) is intentionally
 **not** in this gem; it's the separate, opt-in `yrb-lite-decode` Bun binary (see
