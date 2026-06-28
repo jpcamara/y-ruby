@@ -4,9 +4,10 @@ use magnus::{
 use yrs::sync::{Message, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Doc, ReadTxn, Transact};
+use yrs::{Doc, GetString, ReadTxn, Transact};
 
 mod protocol;
+mod read;
 use protocol::{classify_message, merged_doc_update, update_advances_doc, update_is_ready};
 
 /// Wrapper around yrs Doc.
@@ -139,6 +140,52 @@ impl RbDoc {
             txn.state_vector().encode_v1()
         });
         binary_string(&sv)
+    }
+
+    /// Names of the document's root types, so a content reader can find the one
+    /// holding text without knowing it up front.
+    fn root_names(&self) -> Vec<String> {
+        let doc = &self.0;
+        nogvl(move || {
+            doc.transact()
+                .root_refs()
+                .map(|(name, _)| name.to_string())
+                .collect()
+        })
+    }
+
+    fn read_text(&self, name: String) -> Option<String> {
+        let doc = &self.0;
+        nogvl(move || {
+            doc.transact()
+                .get_text(name.as_str())
+                .map(|t| t.get_string(&doc.transact()))
+        })
+    }
+
+    /// Text of an XML-shaped root, one top-level block per line. The walk +
+    /// block-join logic lives in `read::xml_blocks_text` (pure, Rust-tested);
+    /// this just opens the transaction and resolves the root.
+    fn read_xml(&self, name: String) -> Option<String> {
+        let doc = &self.0;
+        nogvl(move || {
+            let txn = doc.transact();
+            let fragment = txn.get_xml_fragment(name.as_str())?;
+            Some(read::xml_blocks_text(&txn, &fragment))
+        })
+    }
+
+    /// A `Y.Map` root serialized to a JSON object string (keys sorted; values
+    /// recursive). Complements read_text/read_xml for structured shared state.
+    /// Callers parse the JSON (e.g. `JSON.parse(doc.read_map("state"))`). The
+    /// serialization lives in `read::map_json` (pure, Rust-tested).
+    fn read_map(&self, name: String) -> Option<String> {
+        let doc = &self.0;
+        nogvl(move || {
+            let txn = doc.transact();
+            let map = txn.get_map(name.as_str())?;
+            Some(read::map_json(&txn, &map))
+        })
     }
 
     /// Encode state as update (optionally diffed against a state vector)
@@ -315,6 +362,10 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
         method!(RbDoc::encode_state_as_update, -1),
     )?;
     doc_class.define_method("apply_update", method!(RbDoc::apply_update, 1))?;
+    doc_class.define_method("root_names", method!(RbDoc::root_names, 0))?;
+    doc_class.define_method("read_text", method!(RbDoc::read_text, 1))?;
+    doc_class.define_method("read_xml", method!(RbDoc::read_xml, 1))?;
+    doc_class.define_method("read_map", method!(RbDoc::read_map, 1))?;
     doc_class.define_method("update_ready?", method!(RbDoc::update_ready, 1))?;
     doc_class.define_method("update_advances?", method!(RbDoc::update_advances, 1))?;
     doc_class.define_method("sync_step1", method!(RbDoc::sync_step1, 0))?;
