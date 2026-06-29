@@ -41,23 +41,25 @@ npm install yrby-client
   one-include ActionCable concern.
 - Authoritative record-before-distribute semantics: each document change can be
   recorded durably before it goes out to anyone.
-- 
+- Optional server-side reads: `Doc#read_text` and `Doc#read_map` reconstruct a
+  document's contents in Ruby - no Node process - for search, exports, validation,
+  or server-side rendering.
 
-## Why "lite"
+## Scope
 
-The "lite" is the size of the surface. `yrby` binds just the part of `y-crdt` you
-need to *sync and persist* collaborative documents - a `Doc`, awareness, and the
-y-websocket protocol primitives. The Ruby side treats a document as opaque CRDT
-state: it applies updates, answers sync handshakes, and records deltas, but never
-reaches in to read or edit the contents. The browser editor owns the document's
-shape.
+`yrby` binds just the part of `y-crdt` you need to *sync and persist* collaborative
+documents - a `Doc`, awareness, and the y-websocket protocol primitives. By default
+the Ruby side treats a document as opaque CRDT state: it applies updates, answers
+sync handshakes, and records deltas without reaching into the contents - the browser
+editor owns the document's shape. When you do need to look inside, `Doc#read_text`
+and `Doc#read_map` reconstruct it server-side, in Ruby.
 
-## What isn't "lite"
+## Durability and delivery
 
-The surface area may be "lite", but a core focus is on durability, resiliency, delivery
+The surface is intentionally small, but the focus is durability, resiliency, delivery
 guarantees, correctness, and thread safety.
 
-Towards that goal, `yrby` adds capabilities that may even stand out in the Yjs ecosystem:
+Towards that goal, `yrby` adds capabilities that stand out even in the Yjs ecosystem:
 
 - Built-in update acknowledgement: the `ActionCableProvider` in `yrby-client` will continue to
   send updates until an ack is received from the server. [`yrby-actioncable`](https://rubygems.org/gems/yrby-actioncable)

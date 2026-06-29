@@ -15,15 +15,8 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-06-28
 
-First release under the **`yrby-actioncable`** name (previously developed as
-`yrb-lite-actioncable`).
-
-### Changed
-- **Renamed `yrb-lite-actioncable` → `yrby-actioncable`.** Channel concern
-  `YrbLite::ActionCable::Sync` → **`Y::ActionCable::Sync`**; require
-  `require "yrb_lite/action_cable"` → `require "y/action_cable"`. (The stream
-  prefix shipped as `y_ruby:` in 0.2.0; see 0.2.1 for its rename to `yrby:`.)
-  Depends on `yrby >= 0.2.0`.
+First release. The y-websocket sync channel concern is **`Y::ActionCable::Sync`**,
+loaded with `require "y/action_cable"`. Depends on `yrby >= 0.2.0`.
 
 ### Notes
 - Full y-websocket protocol over ActionCable/AnyCable: origin-filtered relay,
