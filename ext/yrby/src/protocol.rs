@@ -8,7 +8,7 @@ use yrs::encoding::read::{Cursor, Read};
 use yrs::sync::protocol::MessageReader;
 use yrs::sync::{Message, SyncMessage};
 use yrs::updates::decoder::{Decode, DecoderV1};
-use yrs::{Doc, ReadTxn, Transact};
+use yrs::{Doc, ReadTxn, StateVector, Transact, Update, WriteTxn};
 
 /// Classify a frame: a non-zero code only for exactly one well-formed message
 /// that consumes the whole buffer (the codes are the match arms below).
@@ -143,13 +143,44 @@ pub(crate) fn update_advances_doc(doc: &Doc, update_bytes: &[u8]) -> Result<bool
     }
 }
 
-/// True if the doc holds pending structs or a pending delete set: blocks that
-/// couldn't integrate because a dependency is missing. Test-only: asserts the
-/// causal-chain parking behavior in the unit tests below.
-#[cfg(test)]
-pub(crate) fn doc_has_pending(doc: &Doc) -> bool {
+/// True if the doc holds un-integrable pending structs or a pending delete set:
+/// blocks that couldn't integrate because a causally-prior update is missing. A
+/// pure read; does not mutate.
+pub(crate) fn has_pending(doc: &Doc) -> bool {
     let txn = doc.transact();
     txn.store().pending_update().is_some() || txn.store().pending_ds().is_some()
+}
+
+/// Encode the doc's **integrated** state as a v1 update diffed against `sv`,
+/// excluding any pending (un-integrable) structs and pending delete set.
+///
+/// Pending blocks are a recovery buffer, not document state. Serving them across
+/// the sync boundary hands a peer content it can't integrate, so the peer parks
+/// the same pending forever and the state-vector/content mismatch drives endless
+/// resync traffic. `encode_state_as_update_v1` merges pending back in (see yrs
+/// `merge_pending_v1`), so to get a gap-free encode we rebuild the state into a
+/// throwaway doc and `prune_pending` there before re-encoding.
+///
+/// Non-destructive: the prune happens only on the throwaway copy; `doc` keeps its
+/// pending, so a genuine gap still heals if its missing dependency later arrives.
+pub(crate) fn integrated_update(doc: &Doc, sv: &StateVector) -> Result<Vec<u8>, String> {
+    // Fast path: with nothing pending the direct encode is already gap-free, so
+    // the clean common case keeps the zero-copy behavior.
+    if !has_pending(doc) {
+        return Ok(doc.transact().encode_state_as_update_v1(sv));
+    }
+    let full = doc
+        .transact()
+        .encode_state_as_update_v1(&StateVector::default());
+    let clean = Doc::new();
+    {
+        let mut txn = clean.transact_mut();
+        txn.apply_update(Update::decode_v1(&full).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        txn.prune_pending();
+    }
+    let out = clean.transact().encode_state_as_update_v1(sv);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -157,7 +188,7 @@ mod tests {
     use super::*;
     use yrs::sync::Awareness;
     use yrs::updates::encoder::Encode;
-    use yrs::Text;
+    use yrs::{GetString, Text};
 
     fn text_update(content: &str) -> Vec<u8> {
         let doc = Doc::new();
@@ -418,24 +449,107 @@ mod tests {
             !update_is_ready(&doc, u3).unwrap(),
             "u3 depends on the missing u2"
         );
-        assert!(
-            !doc_has_pending(&doc),
-            "nothing pending until u3 is applied"
-        );
+        assert!(!has_pending(&doc), "nothing pending until u3 is applied");
 
         // Applying u3 anyway parks it as a pending struct.
         doc.transact_mut()
             .apply_update(yrs::Update::decode_v1(u3).unwrap())
             .unwrap();
-        assert!(
-            doc_has_pending(&doc),
-            "u3 is pending: its parent u2 is missing"
-        );
+        assert!(has_pending(&doc), "u3 is pending: its parent u2 is missing");
 
         // Once u2 arrives (via resync), u3 integrates and pending clears.
         doc.transact_mut()
             .apply_update(yrs::Update::decode_v1(u2).unwrap())
             .unwrap();
-        assert!(!doc_has_pending(&doc), "u2 arrived; u3 integrated");
+        assert!(!has_pending(&doc), "u2 arrived; u3 integrated");
+    }
+
+    // Build a causal gap: `first` inserts "a", `dependent` inserts "b" after it,
+    // so `dependent` alone parks as pending on a doc that lacks `first`.
+    fn gap_pair() -> (Vec<u8>, Vec<u8>) {
+        let src = Doc::new();
+        let txt = src.get_or_insert_text("notepad");
+        txt.insert(&mut src.transact_mut(), 0, "a");
+        let first = src
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+        let sv = src.transact().state_vector();
+        txt.insert(&mut src.transact_mut(), 1, "b");
+        let dependent = src.transact().encode_state_as_update_v1(&sv);
+        (first, dependent)
+    }
+
+    #[test]
+    fn integrated_update_strips_pending_and_is_non_destructive() {
+        let (_first, dependent) = gap_pair();
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&dependent).unwrap())
+            .unwrap();
+        assert!(has_pending(&doc), "the gappy update parked as pending");
+
+        // encode_state_as_update carries the pending; integrated_update does not.
+        let full = doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+        let gap_free = integrated_update(&doc, &yrs::StateVector::default()).unwrap();
+        assert_ne!(full, gap_free, "integrated_update drops the pending bytes");
+
+        // Applying the gap-free encode to a fresh peer must NOT poison it.
+        let peer = Doc::new();
+        peer.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&gap_free).unwrap())
+            .unwrap();
+        assert!(
+            !has_pending(&peer),
+            "peer got no pending from the gap-free state"
+        );
+
+        // Non-destructive: the source doc keeps its pending (so it can still heal).
+        assert!(
+            has_pending(&doc),
+            "integrated_update did not mutate the source"
+        );
+    }
+
+    #[test]
+    fn integrated_update_fast_path_matches_direct_encode_when_clean() {
+        // No pending -> byte-identical to encode_state_as_update (zero-copy path).
+        let (first, _dependent) = gap_pair();
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&first).unwrap())
+            .unwrap();
+        assert!(!has_pending(&doc));
+        let direct = doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+        let via = integrated_update(&doc, &yrs::StateVector::default()).unwrap();
+        assert_eq!(direct, via);
+    }
+
+    #[test]
+    fn a_healed_gap_serves_its_content() {
+        // After the missing dependency arrives, the (formerly pending) content is
+        // integrated and integrated_update includes it.
+        let (first, dependent) = gap_pair();
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&dependent).unwrap())
+            .unwrap();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&first).unwrap())
+            .unwrap();
+        assert!(!has_pending(&doc), "gap healed once first arrived");
+        let gap_free = integrated_update(&doc, &yrs::StateVector::default()).unwrap();
+        let peer = Doc::new();
+        peer.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&gap_free).unwrap())
+            .unwrap();
+        assert_eq!(
+            peer.get_or_insert_text("notepad")
+                .get_string(&peer.transact()),
+            "ab"
+        );
     }
 }

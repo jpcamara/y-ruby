@@ -142,17 +142,38 @@ doc = Y::Doc.new(12345) # specific client ID (used for CRDT identity)
 
 # Encoding
 doc.encode_state_vector           # => current state vector
-doc.encode_state_as_update        # => full update
+doc.encode_state_as_update        # => full update (lossless: keeps pending)
 doc.encode_state_as_update(sv)    # => update diff against state vector
+doc.compacted_state_update        # => full update, gap-free (excludes pending)
 
 # Applying updates
 doc.apply_update(update_bytes)    # apply raw V1 update
+doc.pending?                      # => true if holding un-integrable pending structs
 
 # Sync protocol
 doc.sync_step1                    # => SyncStep1 message (this doc's state vector)
 doc.handle_sync_message(data)     # => [msg_type, sync_type, response]; answers a
-                                  #    peer's SyncStep1 with a SyncStep2
+                                  #    peer's SyncStep1 with an integrated-only
+                                  #    SyncStep2 (never serves pending structs)
 ```
+
+### Pending structs and gap-free state
+
+If a doc applies an update whose causally-prior update is missing (a "gappy"
+update), yrs parks it as a **pending** struct: the integrated state vector stays
+empty, but the pending block is held as a recovery buffer and heals if the
+missing dependency later arrives. `Doc#pending?` reports this.
+
+Pending structs are *not* document state, so they must not cross the sync
+boundary — a peer that receives one can't integrate it and gets stuck. Two
+guarantees keep serving safe:
+
+- `handle_sync_message` answers `SyncStep1` with **integrated-only** state, so a
+  server never serves a struct it can't integrate itself (this is automatic).
+- `Doc#compacted_state_update` gives you the same gap-free full-state update for
+  when you persist or hand off state yourself. It's non-destructive (the doc
+  keeps its pending), while `encode_state_as_update` stays lossless so you can
+  still preserve the raw pending bytes for recovery.
 
 ### Protocol codec (module functions)
 

@@ -81,4 +81,13 @@ module YjsFixtures
     CONTENT = YjsFixtures.b64("AQEBAAQBB2NvbnRlbnQFaGVsbG8A")
     DELETION = YjsFixtures.b64("AAEBAQAB")
   end
+
+  # Fixture 9: a causal gap as two deltas. FIRST inserts "a" (client 1); DEPENDENT
+  # inserts "b" after it. Applied without FIRST, DEPENDENT parks as a pending
+  # struct (empty state vector, no integrated content) -- legacy gappy data that
+  # poisons sync if served. Healed by later applying FIRST.
+  module Gap
+    FIRST = YjsFixtures.b64("AQEBAAQBB25vdGVwYWQBYQA=")
+    DEPENDENT = YjsFixtures.b64("AQEBAYQBAAFiAA==")
+  end
 end

@@ -72,6 +72,21 @@ const concurrentClients = (() => {
   })
 })()
 
+// Fixture 9: a causal gap as two separate deltas. FIRST inserts "a" (client 1);
+// DEPENDENT inserts "b" after it, so DEPENDENT depends on FIRST. Applied to a doc
+// that lacks FIRST, DEPENDENT parks as a pending struct (empty state vector, no
+// integrated content) -- the shape of legacy gappy data poisoning sync.
+const gap = (() => {
+  const updates = []
+  const doc = new Y.Doc()
+  doc.clientID = 1
+  doc.on("update", u => updates.push(u))
+  const t = doc.getText("notepad")
+  t.insert(0, "a")
+  t.insert(1, "b")
+  return { first: b64(updates[0]), dependent: b64(updates[1]) }
+})()
+
 // Fixture 8: a deletion delivered as its own delta. Insert "hello" (client 1),
 // snapshot that state, then delete the first char and capture the incremental
 // update. The deletion diff carries only a delete set (no new structs), so
@@ -191,6 +206,15 @@ module YjsFixtures
   module DeleteRetry
     CONTENT = YjsFixtures.b64("${deleteRetry.content}")
     DELETION = YjsFixtures.b64("${deleteRetry.deletion}")
+  end
+
+  # Fixture 9: a causal gap as two deltas. FIRST inserts "a" (client 1); DEPENDENT
+  # inserts "b" after it. Applied without FIRST, DEPENDENT parks as a pending
+  # struct (empty state vector, no integrated content) -- legacy gappy data that
+  # poisons sync if served. Healed by later applying FIRST.
+  module Gap
+    FIRST = YjsFixtures.b64("${gap.first}")
+    DEPENDENT = YjsFixtures.b64("${gap.dependent}")
   end
 end
 `
