@@ -6,6 +6,18 @@ this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-01
+
+### Changed
+- Raised the `yrby` floor to `>= 0.2.3`. That release makes `Doc#update_advances?`
+  exact for **delete-bearing** updates. The sync channel gates durable
+  record-before-distribute on `update_advances?` (`return :applied unless
+  doc.update_advances?(update)`), so with an older core a lost-ack retry of a
+  deletion the server had already integrated was re-recorded and re-broadcast
+  each time. No code change here — pinning the floor just makes the gem's
+  exactly-once durable-recording guarantee self-enforcing instead of dependent on
+  the app updating the core gem.
+
 ## [0.2.1] - 2026-06-29
 
 ### Changed
