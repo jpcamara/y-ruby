@@ -653,6 +653,9 @@ mod tests {
             .apply_update(yrs::Update::decode_v1(&gap_free).unwrap())
             .unwrap();
         assert!(!has_pending(&peer), "the pending delete set was not served");
-        assert!(has_pending(&doc), "non-destructive: source keeps its pending");
+        assert!(
+            has_pending(&doc),
+            "non-destructive: source keeps its pending"
+        );
     }
 }
