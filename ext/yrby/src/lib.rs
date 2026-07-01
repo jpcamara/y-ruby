@@ -8,7 +8,10 @@ use yrs::{Doc, GetString, ReadTxn, Transact};
 
 mod protocol;
 mod read;
-use protocol::{classify_message, merged_doc_update, update_advances_doc, update_is_ready};
+use protocol::{
+    classify_message, has_pending, integrated_update, merged_doc_update, update_advances_doc,
+    update_is_ready,
+};
 
 /// Wrapper around yrs Doc.
 ///
@@ -188,6 +191,28 @@ impl RbDoc {
         })
     }
 
+    /// True if the doc holds un-integrable pending structs or a pending delete
+    /// set — content that couldn't integrate because a causally-prior update is
+    /// missing. Such content is a recovery buffer, not document state; it heals if
+    /// the missing dependency later arrives. A pure read.
+    fn pending(&self) -> bool {
+        let doc = &self.0;
+        nogvl(move || has_pending(doc))
+    }
+
+    /// Like `encode_state_as_update` (full state), but **gap-free**: it excludes
+    /// any pending (un-integrable) structs and pending delete set. Use this when
+    /// persisting or serving state that other peers will apply — serving pending
+    /// content poisons their sync. Non-destructive: this doc keeps its pending, so
+    /// a genuine gap still heals if its dependency arrives. (`encode_state_as_update`
+    /// stays lossless for raw-update recovery.)
+    fn compacted_state_update(&self) -> Result<RString, Error> {
+        let doc = &self.0;
+        let update = nogvl(move || integrated_update(doc, &yrs::StateVector::default()))
+            .map_err(yrb_error)?;
+        Ok(binary_string(&update))
+    }
+
     /// Encode state as update (optionally diffed against a state vector)
     fn encode_state_as_update(&self, args: &[Value]) -> Result<RString, Error> {
         let sv_bytes: Option<Vec<u8>> = if args.is_empty() {
@@ -263,9 +288,13 @@ impl RbDoc {
                 match msg {
                     Message::Sync(sync_msg) => match sync_msg {
                         SyncMessage::SyncStep1(sv) => {
-                            // Respond with SyncStep2
-                            let txn = doc.transact();
-                            let update = txn.encode_state_as_update_v1(&sv);
+                            // Respond with SyncStep2 carrying only *integrated*
+                            // state. Never hand a peer un-integrable pending
+                            // structs: the peer would park the same pending
+                            // forever and the state-vector/content mismatch drives
+                            // endless resync traffic. (integrated_update is a no-op
+                            // fast path when nothing is pending.)
+                            let update = integrated_update(doc, &sv)?;
                             let response = Message::Sync(SyncMessage::SyncStep2(update));
                             Ok((0, 0, response.encode_v1()))
                         }
@@ -366,6 +395,11 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     doc_class.define_method("read_text", method!(RbDoc::read_text, 1))?;
     doc_class.define_method("read_xml", method!(RbDoc::read_xml, 1))?;
     doc_class.define_method("read_map", method!(RbDoc::read_map, 1))?;
+    doc_class.define_method("pending?", method!(RbDoc::pending, 0))?;
+    doc_class.define_method(
+        "compacted_state_update",
+        method!(RbDoc::compacted_state_update, 0),
+    )?;
     doc_class.define_method("update_ready?", method!(RbDoc::update_ready, 1))?;
     doc_class.define_method("update_advances?", method!(RbDoc::update_advances, 1))?;
     doc_class.define_method("sync_step1", method!(RbDoc::sync_step1, 0))?;

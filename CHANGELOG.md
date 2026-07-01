@@ -6,6 +6,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-01
+
+### Fixed
+
+- **Sync no longer serves un-integrable pending structs.** When a doc holds a
+  *pending* struct (a gappy update whose causally-prior update is missing — e.g.
+  legacy data recorded before the `update_ready?` gate existed), its integrated
+  state vector is empty but `encode_state_as_update` merges the pending bytes back
+  in. Answering a peer's `SyncStep1` with that state handed the peer content it
+  couldn't integrate, so it parked the same pending forever and the empty-SV /
+  non-empty-content mismatch drove endless resync traffic (observed as a browser
+  re-sending frames several times a second). `handle_sync_message` now answers
+  `SyncStep1` with **integrated-only** state, so a server never serves a struct it
+  can't integrate itself. Neutralizes existing poisoned server state on deploy —
+  no migration needed. The server's own pending is untouched and still heals if
+  the missing dependency later arrives (only then does the content become
+  visible in sync). Live delta relay (`Update` frames) is unchanged.
+
+### Added
+
+- `Doc#pending?` — true if the doc holds un-integrable pending structs or a
+  pending delete set (content waiting on a missing causally-prior update).
+- `Doc#compacted_state_update` — like `encode_state_as_update` (full state) but
+  **gap-free**: excludes pending structs/delete set. Use it when persisting or
+  serving state other peers will apply. Non-destructive — the doc keeps its
+  pending (so it can still heal), and `encode_state_as_update` stays lossless for
+  raw-update recovery.
+
 ## [0.2.3] - 2026-07-01
 
 ### Fixed
