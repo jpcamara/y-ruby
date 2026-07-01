@@ -84,7 +84,33 @@ const gap = (() => {
   const t = doc.getText("notepad")
   t.insert(0, "a")
   t.insert(1, "b")
-  return { first: b64(updates[0]), dependent: b64(updates[1]) }
+
+  // A second, independent gap from a DIFFERENT client (2): insert "x" then "y",
+  // keep only the "y" delta. Applied on top of client 1's integrated content it
+  // parks as pending *without* dropping the real content -- the mixed case.
+  const other = []
+  const d2 = new Y.Doc()
+  d2.clientID = 2
+  d2.on("update", u => other.push(u))
+  const t2 = d2.getText("notepad")
+  t2.insert(0, "x")
+  t2.insert(1, "y")
+
+  return { first: b64(updates[0]), dependent: b64(updates[1]), dependentOther: b64(other[1]) }
+})()
+
+// Fixture 10: a pending *delete set*. Client 3 inserts "z", then deletes it; we
+// keep only the deletion delta. Applied to a doc without client 3's content, the
+// delete set references a struct that isn't there, so it parks as a pending
+// delete set (the delete-side counterpart to a pending struct).
+const pendingDelete = (() => {
+  const doc = new Y.Doc()
+  doc.clientID = 3
+  const t = doc.getText("notepad")
+  t.insert(0, "z")
+  const sv = Y.encodeStateVector(doc)
+  t.delete(0, 1)
+  return b64(Y.encodeStateAsUpdate(doc, sv)) // deletion only
 })()
 
 // Fixture 8: a deletion delivered as its own delta. Insert "hello" (client 1),
@@ -215,6 +241,16 @@ module YjsFixtures
   module Gap
     FIRST = YjsFixtures.b64("${gap.first}")
     DEPENDENT = YjsFixtures.b64("${gap.dependent}")
+    # A gappy insert from a different client (2), for the "integrated content plus
+    # pending" mixed case (applied on top of FIRST's integrated "a").
+    DEPENDENT_OTHER = YjsFixtures.b64("${gap.dependentOther}")
+  end
+
+  # Fixture 10: a pending *delete set* -- a deletion delta whose target struct the
+  # doc doesn't have, so it parks as a pending delete set (delete-side counterpart
+  # to a pending struct). See DeleteRetry for a fully-integrated deletion.
+  module PendingDelete
+    UPDATE = YjsFixtures.b64("${pendingDelete}")
   end
 end
 `

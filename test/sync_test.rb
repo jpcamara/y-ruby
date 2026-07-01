@@ -135,6 +135,23 @@ class SyncTest < Minitest::Test
     assert_equal source.encode_state_vector, rebuilt.encode_state_vector
   end
 
+  def test_sync_step1_is_answered_with_gap_free_state_from_the_store
+    # A store holding a legacy gappy update: the loaded doc has a pending struct.
+    # The concern must answer SyncStep1 with integrated-only state, so a client
+    # applying the reply is not poisoned.
+    transmits = []
+    helper = helper_for(store: [YjsFixtures::Gap::DEPENDENT], transmits: transmits)
+
+    client = Y::Doc.new
+    helper.sync_receive({ "update" => Base64.strict_encode64(client.sync_step1) }, "doc-key")
+
+    assert_equal 1, transmits.length
+    reply = Base64.strict_decode64(transmits.first["update"])
+    client.handle_sync_message(reply)
+
+    refute_predicate client, :pending?, "the concern served integrated-only state"
+  end
+
   def test_records_then_relays_and_acks_update
     store = []
     recorded = []
