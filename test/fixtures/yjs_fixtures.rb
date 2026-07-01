@@ -89,5 +89,15 @@ module YjsFixtures
   module Gap
     FIRST = YjsFixtures.b64("AQEBAAQBB25vdGVwYWQBYQA=")
     DEPENDENT = YjsFixtures.b64("AQEBAYQBAAFiAA==")
+    # A gappy insert from a different client (2), for the "integrated content plus
+    # pending" mixed case (applied on top of FIRST's integrated "a").
+    DEPENDENT_OTHER = YjsFixtures.b64("AQECAYQCAAF5AA==")
+  end
+
+  # Fixture 10: a pending *delete set* -- a deletion delta whose target struct the
+  # doc doesn't have, so it parks as a pending delete set (delete-side counterpart
+  # to a pending struct). See DeleteRetry for a fully-integrated deletion.
+  module PendingDelete
+    UPDATE = YjsFixtures.b64("AAEDAQAB")
   end
 end

@@ -17,6 +17,8 @@ require_relative "fixtures/yjs_fixtures"
 class PendingTest < Minitest::Test
   FIRST = YjsFixtures::Gap::FIRST
   DEPENDENT = YjsFixtures::Gap::DEPENDENT
+  DEPENDENT_OTHER = YjsFixtures::Gap::DEPENDENT_OTHER
+  PENDING_DELETE = YjsFixtures::PendingDelete::UPDATE
 
   # --- detection ---
 
@@ -118,5 +120,89 @@ class PendingTest < Minitest::Test
     client.handle_sync_message(reply)
 
     assert_equal "hello world", client.read_text("content")
+  end
+
+  # --- mixed: real integrated content AND a pending struct together ---
+
+  def test_compacted_keeps_content_and_drops_pending_when_mixed
+    doc = Y::Doc.new
+    doc.apply_update(FIRST)           # integrated "a"
+    doc.apply_update(DEPENDENT_OTHER) # + a pending struct from another client
+
+    assert_predicate doc, :pending?
+    assert_equal "a", doc.read_text("notepad"), "only the integrated content is visible"
+
+    peer = Y::Doc.new
+    peer.apply_update(doc.compacted_state_update)
+
+    assert_equal "a", peer.read_text("notepad"), "kept the real content"
+    refute_predicate peer, :pending?, "dropped the pending"
+  end
+
+  def test_sync_diff_to_an_up_to_date_peer_excludes_pending
+    # The production path: server has integrated content + pending; a peer that
+    # already has the content asks for a diff (its own state vector).
+    server = Y::Doc.new
+    server.apply_update(FIRST)
+    server.apply_update(DEPENDENT_OTHER)
+
+    peer = Y::Doc.new
+    peer.apply_update(FIRST) # already up to date on integrated state
+    reply = server.handle_sync_message(peer.sync_step1)[2]
+    peer.handle_sync_message(reply)
+
+    assert_equal "a", peer.read_text("notepad")
+    refute_predicate peer, :pending?, "the diff carried no pending"
+  end
+
+  # --- pending delete set (delete-side counterpart) ---
+
+  def test_pending_delete_set_is_detected_and_not_served
+    doc = Y::Doc.new
+    doc.apply_update(PENDING_DELETE) # a deletion whose target struct is absent
+
+    assert_predicate doc, :pending?, "an orphan deletion parks as a pending delete set"
+
+    peer = Y::Doc.new
+    peer.apply_update(doc.compacted_state_update)
+
+    refute_predicate peer, :pending?, "the pending delete set was not served"
+    assert_predicate doc, :pending?, "non-destructive: source keeps its pending"
+  end
+
+  def test_sync_step2_does_not_serve_a_pending_delete_set
+    server = Y::Doc.new
+    server.apply_update(PENDING_DELETE)
+
+    client = Y::Doc.new
+    reply = server.handle_sync_message(client.sync_step1)[2]
+    client.handle_sync_message(reply)
+
+    refute_predicate client, :pending?
+  end
+
+  # --- thread safety of the new readers (match the nogvl model) ---
+
+  def test_pending_and_compacted_are_thread_safe_under_contention
+    doc = Y::Doc.new
+    doc.apply_update(FIRST)
+    doc.apply_update(DEPENDENT_OTHER) # holds pending, so the slow prune path runs
+    errors = Queue.new
+
+    threads = 8.times.map do
+      Thread.new do
+        50.times do
+          doc.pending?
+          doc.compacted_state_update
+          doc.encode_state_as_update
+        end
+      rescue StandardError => e
+        errors << e
+      end
+    end
+    threads.each(&:join)
+
+    assert_empty([].tap { |a| a << errors.pop until errors.empty? })
+    assert_predicate doc, :pending?, "reads left the doc unchanged"
   end
 end

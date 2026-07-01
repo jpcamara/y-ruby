@@ -552,4 +552,107 @@ mod tests {
             "ab"
         );
     }
+
+    // A gappy insert from its own independent client: inserts two chars and
+    // returns only the second delta, which depends on the (missing) first.
+    fn independent_gappy_insert() -> Vec<u8> {
+        let src = Doc::new();
+        let txt = src.get_or_insert_text("notepad");
+        txt.insert(&mut src.transact_mut(), 0, "x");
+        let sv = src.transact().state_vector();
+        txt.insert(&mut src.transact_mut(), 1, "y");
+        let txn = src.transact();
+        txn.encode_state_as_update_v1(&sv)
+    }
+
+    #[test]
+    fn integrated_update_keeps_content_and_drops_pending_when_mixed() {
+        // The realistic case: a doc with real integrated content AND a pending
+        // struct. Pruning must keep the content and drop only the pending.
+        let (first, _dep) = gap_pair();
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&first).unwrap())
+            .unwrap(); // integrated "a"
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&independent_gappy_insert()).unwrap())
+            .unwrap(); // + a pending struct from another client
+        assert!(has_pending(&doc));
+
+        let gap_free = integrated_update(&doc, &yrs::StateVector::default()).unwrap();
+        let peer = Doc::new();
+        peer.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&gap_free).unwrap())
+            .unwrap();
+        assert_eq!(
+            peer.get_or_insert_text("notepad")
+                .get_string(&peer.transact()),
+            "a",
+            "kept the integrated content"
+        );
+        assert!(!has_pending(&peer), "dropped the pending");
+    }
+
+    #[test]
+    fn integrated_update_diffs_against_a_peer_sv_and_excludes_pending() {
+        // The production signature: `handle_sync_message` calls
+        // integrated_update(doc, peer_sv). A peer already holding the integrated
+        // content should get a diff carrying no new content and no pending.
+        let (first, _dep) = gap_pair();
+        let server = Doc::new();
+        server
+            .transact_mut()
+            .apply_update(yrs::Update::decode_v1(&first).unwrap())
+            .unwrap();
+        server
+            .transact_mut()
+            .apply_update(yrs::Update::decode_v1(&independent_gappy_insert()).unwrap())
+            .unwrap();
+
+        let peer = Doc::new();
+        peer.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&first).unwrap())
+            .unwrap();
+        let peer_sv = peer.transact().state_vector();
+
+        let diff = integrated_update(&server, &peer_sv).unwrap();
+        peer.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&diff).unwrap())
+            .unwrap();
+        assert_eq!(
+            peer.get_or_insert_text("notepad")
+                .get_string(&peer.transact()),
+            "a"
+        );
+        assert!(!has_pending(&peer), "the diff carried no pending");
+    }
+
+    #[test]
+    fn integrated_update_strips_a_pending_delete_set() {
+        // A deletion whose target struct is absent parks as a pending *delete
+        // set* -- the delete-side counterpart to a pending struct.
+        let src = Doc::new();
+        let txt = src.get_or_insert_text("notepad");
+        txt.insert(&mut src.transact_mut(), 0, "z");
+        let sv = src.transact().state_vector();
+        txt.remove_range(&mut src.transact_mut(), 0, 1);
+        let deletion = src.transact().encode_state_as_update_v1(&sv); // delete-only
+
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&deletion).unwrap())
+            .unwrap();
+        assert!(
+            has_pending(&doc),
+            "the orphan deletion parked as a pending delete set"
+        );
+
+        let gap_free = integrated_update(&doc, &yrs::StateVector::default()).unwrap();
+        let peer = Doc::new();
+        peer.transact_mut()
+            .apply_update(yrs::Update::decode_v1(&gap_free).unwrap())
+            .unwrap();
+        assert!(!has_pending(&peer), "the pending delete set was not served");
+        assert!(has_pending(&doc), "non-destructive: source keeps its pending");
+    }
 }
