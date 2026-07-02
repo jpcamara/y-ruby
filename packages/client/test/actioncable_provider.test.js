@@ -341,3 +341,52 @@ test("a promise-rejecting transport send surfaces via onError (no unhandled reje
 
   assert.ok(errors.some((e) => e.context === "send" && e.err === rejection), "promise rejection observed via onError");
 });
+
+test("bfcache: presence is stashed on pagehide and restored on pageshow(persisted)", (t) => {
+  // Shim a window so the unload/restore handlers install in node.
+  const listeners = new Map();
+  globalThis.window = {
+    addEventListener: (name, fn) => listeners.set(name, fn),
+    removeEventListener: (name) => listeners.delete(name),
+  };
+  t.after(() => {
+    delete globalThis.window;
+  });
+
+  const c = fakeConsumer();
+  const p = makeProvider(t, new Y.Doc(), c, { id: "bf" });
+  p.connect();
+  c.deliverConnected();
+  p.awareness.setLocalStateField("user", "alice");
+  assert.deepEqual(p.awareness.getLocalState(), { user: "alice" });
+
+  // The page goes into the bfcache: presence is removed (peers drop our cursor).
+  listeners.get("pagehide")();
+  assert.equal(p.awareness.getLocalState(), null, "pagehide removed local presence");
+
+  // Restored from the bfcache: presence must come back, or the returning user
+  // rejoins as a ghost (editor bindings only set awareness once at setup).
+  listeners.get("pageshow")({ persisted: true });
+  assert.deepEqual(p.awareness.getLocalState(), { user: "alice" }, "pageshow(persisted) restored presence");
+});
+
+test("bfcache: a non-persisted pageshow (normal load) does not resurrect stale presence", (t) => {
+  const listeners = new Map();
+  globalThis.window = {
+    addEventListener: (name, fn) => listeners.set(name, fn),
+    removeEventListener: (name) => listeners.delete(name),
+  };
+  t.after(() => {
+    delete globalThis.window;
+  });
+
+  const c = fakeConsumer();
+  const p = makeProvider(t, new Y.Doc(), c, { id: "bf2" });
+  p.connect();
+  c.deliverConnected();
+  p.awareness.setLocalStateField("user", "bob");
+  listeners.get("pagehide")();
+  listeners.get("pageshow")({ persisted: false }); // a fresh navigation, not a restore
+
+  assert.equal(p.awareness.getLocalState(), null, "no restore on a normal load");
+});

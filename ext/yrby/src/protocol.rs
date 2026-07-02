@@ -772,6 +772,60 @@ mod tests {
     }
 
     #[test]
+    fn integrated_update_never_serves_pending_under_concurrent_gappy_applies() {
+        // Concurrency net for the gap-free invariant: race a writer that parks
+        // and heals a gappy update against a reader encoding, and assert every
+        // single encode is pending-free for a fresh peer.
+        //
+        // Honest scope: the original TOCTOU (pending check and encode in
+        // separate transactions) has a nanoseconds-wide window and did NOT
+        // reproduce here even at 20k iterations — that fix's guarantee is
+        // structural (one transaction is atomic under the doc's lock), verified
+        // by construction, not by this test. What this test DOES catch is any
+        // grosser regression: encoding without the lock, a fast path that skips
+        // the pending check entirely, or prune logic that leaks under contention.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc as StdArc;
+
+        let (first, dependent) = gap_pair();
+        let doc = StdArc::new(Doc::new());
+        let stop = StdArc::new(AtomicBool::new(false));
+
+        let writer = {
+            let doc = StdArc::clone(&doc);
+            let stop = StdArc::clone(&stop);
+            let dependent = dependent.clone();
+            let first = first.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    // Park a pending struct, then heal it, over and over — the
+                    // encode below keeps racing both transitions.
+                    doc.transact_mut()
+                        .apply_update(yrs::Update::decode_v1(&dependent).unwrap())
+                        .unwrap();
+                    doc.transact_mut()
+                        .apply_update(yrs::Update::decode_v1(&first).unwrap())
+                        .unwrap();
+                }
+            })
+        };
+
+        for _ in 0..500 {
+            let encoded = integrated_update(&doc, &yrs::StateVector::default()).unwrap();
+            let peer = Doc::new();
+            peer.transact_mut()
+                .apply_update(yrs::Update::decode_v1(&encoded).unwrap())
+                .unwrap();
+            assert!(
+                !has_pending(&peer),
+                "an integrated_update encode leaked pending to a peer"
+            );
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+    }
+
+    #[test]
     fn integrated_update_strips_a_pending_delete_set() {
         // A deletion whose target struct is absent parks as a pending *delete
         // set* -- the delete-side counterpart to a pending struct.
